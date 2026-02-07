@@ -32,12 +32,12 @@ Claude Desktop 설정 파일(`~/.config/claude/config.json`)에 MCP 서버 추�
 ```
 "Tizen Unified에서 사용 가능한 커널 패키지를 찾아줘"
 "nginx 패키지의 상세 정보를 알려줘"
-"version 1.2.3-1과 1.2.4-1 중 어느 것이 최신인가?"
+"인덱스된 저장소 목록을 보여줘"
 ```
 
 ## 제공 도구 (Tools)
 
-### 1. search_packages
+### 1. rpm_search
 
 RPM 패키지 검색 (이름, 설명, 의미 기반)
 
@@ -50,7 +50,7 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
 **예시:**
 ```json
 {
-  "name": "search_packages",
+  "name": "rpm_search",
   "arguments": {
     "query": "kernel",
     "arch": "x86_64",
@@ -60,9 +60,9 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
 }
 ```
 
-### 2. get_package_info
+### 2. rpm_package_info
 
-특정 패키지의 상세 정보 조회
+특정 RPM 패키지의 상세 정보 조회
 
 **파라미터:**
 - `name` (필수): 패키지 이름
@@ -72,7 +72,7 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
 **예시:**
 ```json
 {
-  "name": "get_package_info",
+  "name": "rpm_package_info",
   "arguments": {
     "name": "nginx",
     "arch": "x86_64"
@@ -80,53 +80,21 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
 }
 ```
 
-### 3. list_repositories
+### 3. rpm_repositories
 
-인덱스된 모든 저장소 목록 조회
+인덱스된 모든 RPM 저장소 목록 및 패키지 수 조회
 
 **파라미터:** 없음
 
+**반환 정보:**
+- 저장소 이름
+- 각 저장소의 패키지 수
+
 **예시:**
 ```json
 {
-  "name": "list_repositories",
+  "name": "rpm_repositories",
   "arguments": {}
-}
-```
-
-### 4. compare_versions
-
-두 RPM 버전을 rpmvercmp 알고리즘으로 비교
-
-**파라미터:**
-- `version1` (필수): 첫 번째 버전 (epoch:version-release 형식)
-- `version2` (필수): 두 번째 버전
-
-**예시:**
-```json
-{
-  "name": "compare_versions",
-  "arguments": {
-    "version1": "1.2.3-1",
-    "version2": "1.2.4-1"
-  }
-}
-```
-
-### 5. get_repository_stats
-
-특정 저장소의 통계 정보
-
-**파라미터:**
-- `repo` (필수): 저장소 이름
-
-**예시:**
-```json
-{
-  "name": "get_repository_stats",
-  "arguments": {
-    "repo": "tizen-unified"
-  }
 }
 ```
 

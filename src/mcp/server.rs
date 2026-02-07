@@ -6,7 +6,7 @@ use crate::mcp::tools::get_tools;
 use crate::normalize::Package;
 use crate::search::SearchFilters;
 use serde_json::Value;
-use std::cmp::Ordering;
+
 use std::io::{BufRead, BufReader, Write};
 use tracing::{debug, error, info};
 
@@ -151,11 +151,9 @@ impl McpServer {
             .map_err(|e| RpmSearchError::Config(format!("Invalid tool call params: {}", e)))?;
 
         let result_text = match tool_params.name.as_str() {
-            "search_packages" => self.search_packages(&tool_params.arguments)?,
-            "get_package_info" => self.get_package_info(&tool_params.arguments)?,
-            "list_repositories" => self.list_repositories()?,
-            "compare_versions" => self.compare_versions(&tool_params.arguments)?,
-            "get_repository_stats" => self.get_repository_stats(&tool_params.arguments)?,
+            "rpm_search" => self.search_packages(&tool_params.arguments)?,
+            "rpm_package_info" => self.get_package_info(&tool_params.arguments)?,
+            "rpm_repositories" => self.list_repositories()?,
             _ => {
                 return Ok(serde_json::to_value(ToolResult::error(format!(
                     "Unknown tool: {}",
@@ -301,83 +299,6 @@ impl McpServer {
         for (i, (repo, count)) in repos.iter().enumerate() {
             result.push_str(&format!("{}. {}: {} package(s)\n", i + 1, repo, count));
         }
-
-        Ok(result)
-    }
-
-    fn compare_versions(&self, args: &Value) -> Result<String> {
-        let version1 = args["version1"]
-            .as_str()
-            .ok_or_else(|| RpmSearchError::Config("Missing 'version1' parameter".to_string()))?;
-
-        let version2 = args["version2"]
-            .as_str()
-            .ok_or_else(|| RpmSearchError::Config("Missing 'version2' parameter".to_string()))?;
-
-        info!("Comparing versions: '{}' vs '{}'", version1, version2);
-
-        // Parse versions
-        let pkg1 = self.parse_version_string(version1)?;
-        let pkg2 = self.parse_version_string(version2)?;
-
-        let comparison = pkg1.cmp(&pkg2);
-
-        let result = match comparison {
-            Ordering::Less => format!("'{}' is OLDER than '{}'", version1, version2),
-            Ordering::Equal => format!("'{}' is EQUAL to '{}'", version1, version2),
-            Ordering::Greater => format!("'{}' is NEWER than '{}'", version1, version2),
-        };
-
-        Ok(result)
-    }
-
-    fn parse_version_string(&self, version_str: &str) -> Result<Package> {
-        // Parse epoch:version-release or version-release
-        let (epoch_str, rest) = if let Some(idx) = version_str.find(':') {
-            (&version_str[..idx], &version_str[idx + 1..])
-        } else {
-            ("0", version_str)
-        };
-
-        let epoch = epoch_str.parse::<i64>().map_err(|_| {
-            RpmSearchError::Config(format!("Invalid epoch in version: {}", version_str))
-        })?;
-
-        let (version, release) = if let Some(idx) = rest.rfind('-') {
-            (&rest[..idx], &rest[idx + 1..])
-        } else {
-            (rest, "1")
-        };
-
-        Ok(Package {
-            pkg_id: None,
-            name: String::new(),
-            epoch: Some(epoch),
-            version: version.to_string(),
-            release: release.to_string(),
-            arch: String::new(),
-            summary: String::new(),
-            description: String::new(),
-            repo: String::new(),
-            requires: vec![],
-            provides: vec![],
-        })
-    }
-
-    fn get_repository_stats(&self, args: &Value) -> Result<String> {
-        let repo = args["repo"]
-            .as_str()
-            .ok_or_else(|| RpmSearchError::Config("Missing 'repo' parameter".to_string()))?;
-
-        info!("Getting repository stats: repo='{}'", repo);
-
-        let count = self.api.repo_package_count(repo)?;
-
-        let result = format!(
-            "Repository: {}\n\
-             Total packages: {}\n",
-            repo, count
-        );
 
         Ok(result)
     }

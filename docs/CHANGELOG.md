@@ -121,7 +121,9 @@ cargo build --release
 - ✅ **MCP 서버 지원**
   - AI 에이전트(Claude Desktop 등)가 RPM 검색 시스템에 접근 가능
   - stdio 기반 JSON-RPC 2.0 통신
-  - 5개의 도구 제공: search_packages, get_package_info, list_repositories, compare_versions, get_repository_stats
+  - 3개의 핵심 도구 제공: rpm_search, rpm_package_info, rpm_repositories
+  - rpm_ prefix로 다른 MCP 서버와 명확히 구별
+  - 불필요한 중복 기능 제거로 AI 에이전트 사용성 향상
 
 ### 기술적 변경사항
 
@@ -139,25 +141,19 @@ cargo build --release
 
 ### 제공 도구
 
-1. **search_packages** - 패키지 검색
+1. **rpm_search** - RPM 패키지 검색
    - 자연어 쿼리 지원
    - arch, repo 필터링
    - top_k 결과 제한
 
-2. **get_package_info** - 패키지 상세 정보
+2. **rpm_package_info** - RPM 패키지 상세 정보
    - 의존성 목록 (requires/provides)
    - 버전 정보
    - 메타데이터
 
-3. **list_repositories** - 저장소 목록
-   - 패키지 개수 포함
-
-4. **compare_versions** - 버전 비교
-   - rpmvercmp 알고리즘 활용
-   - epoch:version-release 지원
-
-5. **get_repository_stats** - 저장소 통계
-   - 패키지 개수
+3. **rpm_repositories** - RPM 저장소 목록 및 통계
+   - 모든 저장소 목록
+   - 각 저장소의 패키지 개수
 
 ### 빌드 방법
 

@@ -417,23 +417,24 @@ Add to `~/.config/claude/config.json`:
 
 ### Available Tools
 
-The MCP server provides 5 tools:
+The MCP server provides 3 essential tools:
 
-1. **search_packages** - Search for RPM packages
-2. **get_package_info** - Get detailed package information
-3. **list_repositories** - List all indexed repositories
-4. **compare_versions** - Compare RPM versions
-5. **get_repository_stats** - Repository statistics
+1. **rpm_search** - Search for RPM packages (name, description, semantic)
+2. **rpm_package_info** - Get detailed package information including dependencies
+3. **rpm_repositories** - List all indexed repositories with package counts
 
 ### Usage Example
 
 In Claude Desktop:
 ```
 You: "Find all kernel packages for x86_64 in Tizen Unified"
-Claude: [calls search_packages with appropriate filters]
+Claude: [calls rpm_search with appropriate filters]
 
-You: "Compare version 1.2.3-1 with 1.2.4-1"
-Claude: [calls compare_versions and explains which is newer]
+You: "Show me detailed information about the nginx package"
+Claude: [calls rpm_package_info for nginx]
+
+You: "What repositories are indexed?"
+Claude: [calls rpm_repositories]
 ```
 
 See [docs/MCP_GUIDE.md](docs/MCP_GUIDE.md) for complete integration guide.

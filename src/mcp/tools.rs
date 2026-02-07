@@ -5,7 +5,7 @@ use serde_json::json;
 pub fn get_tools() -> Vec<Tool> {
     vec![
         Tool {
-            name: "search_packages".to_string(),
+            name: "rpm_search".to_string(),
             description: "Search RPM packages by name, description, or semantic similarity"
                 .to_string(),
             input_schema: json!({
@@ -33,8 +33,8 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "get_package_info".to_string(),
-            description: "Get detailed information about a specific package".to_string(),
+            name: "rpm_package_info".to_string(),
+            description: "Get detailed information about a specific RPM package".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -55,44 +55,11 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "list_repositories".to_string(),
-            description: "List all indexed repositories with package counts".to_string(),
+            name: "rpm_repositories".to_string(),
+            description: "List all indexed RPM repositories with package counts".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {}
-            }),
-        },
-        Tool {
-            name: "compare_versions".to_string(),
-            description: "Compare two RPM package versions using the rpmvercmp algorithm"
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "version1": {
-                        "type": "string",
-                        "description": "First version (format: epoch:version-release or version-release)"
-                    },
-                    "version2": {
-                        "type": "string",
-                        "description": "Second version (format: epoch:version-release or version-release)"
-                    }
-                },
-                "required": ["version1", "version2"]
-            }),
-        },
-        Tool {
-            name: "get_repository_stats".to_string(),
-            description: "Get statistics for a specific repository".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name"
-                    }
-                },
-                "required": ["repo"]
             }),
         },
     ]
