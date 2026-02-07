@@ -38,3 +38,4 @@ Thumbs.db
 .agent-quickref.md
 
 .rpm-sync/
+sync-config.toml

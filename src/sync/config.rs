@@ -72,7 +72,7 @@ impl SyncConfig {
             repositories: vec![
                 RepoSyncConfig {
                     name: "tizen-unified".to_string(),
-                    base_url: "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Base/reference/repos/standard/packages/".to_string(),
+                    base_url: "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/".to_string(),
                     interval_seconds: 3600,
                     enabled: true,
                 },
