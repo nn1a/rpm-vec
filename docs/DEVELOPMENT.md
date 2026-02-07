@@ -140,24 +140,11 @@ cargo build --release --features mcp
 ```
 - 기능: 기본 빌드 + MCP 서버 (mcp-server 커맨드)
 
-### 자동 동기화 포함 빌드
-```bash
-cargo build --release --features sync
-```
-- 기능: 기본 빌드 + 자동 동기화 (sync-* 커맨드)
-
 ### 모든 기능 포함 빌드
 ```bash
-cargo build --release --features "embedding,mcp,sync"
+cargo build --release --features mcp
 ```
-- 기능: embedding + MCP 서버 + 자동 동기화
-
-### 최소 빌드 (embedding 제외)
-```bash
-cargo build --release --no-default-features
-```
-- 크기: ~10MB
-- 기능: 인덱싱, 이름 검색, 필터링
+- 기능: 기본 임베딩 + 자동 동기화 + MCP 서버
 
 ## 테스트 전략
 
@@ -222,7 +209,7 @@ mod tests {
     - toml (설정 파일)
     - chrono (시간 추적, serde support)
     - tokio (스케줄러)
-  - Optional feature: `--features sync`
+  - 항상 포함됨
 
 ### 장기
 - [ ] 웹 API 서버 (REST/gRPC)

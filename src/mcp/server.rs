@@ -1,32 +1,19 @@
-#[cfg(feature = "mcp")]
 use crate::api::RpmSearchApi;
-#[cfg(feature = "mcp")]
 use crate::config::Config;
-#[cfg(feature = "mcp")]
 use crate::error::{Result, RpmSearchError};
-#[cfg(feature = "mcp")]
 use crate::mcp::protocol::*;
-#[cfg(feature = "mcp")]
 use crate::mcp::tools::get_tools;
-#[cfg(feature = "mcp")]
 use crate::normalize::Package;
-#[cfg(feature = "mcp")]
 use crate::search::SearchFilters;
-#[cfg(feature = "mcp")]
 use serde_json::Value;
-#[cfg(feature = "mcp")]
 use std::cmp::Ordering;
-#[cfg(feature = "mcp")]
 use std::io::{BufRead, BufReader, Write};
-#[cfg(feature = "mcp")]
 use tracing::{debug, error, info};
 
-#[cfg(feature = "mcp")]
 pub struct McpServer {
     api: RpmSearchApi,
 }
 
-#[cfg(feature = "mcp")]
 impl McpServer {
     pub fn new(config: Config) -> Result<Self> {
         let api = RpmSearchApi::new(config)?;

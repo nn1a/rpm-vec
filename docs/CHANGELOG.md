@@ -24,7 +24,7 @@
   - repomd.xml의 checksum 비교로 변경 감지
   - 변경 시 primary.xml 다운로드 및 증분 업데이트
   - 동기화 상태 추적 및 이력 관리
-  - Optional feature로 제공 (`--features sync`)
+  - 항상 포함됨
 
 - ✅ **스케줄러**
   - 데몬 모드로 백그라운드 지속 실행
@@ -105,11 +105,11 @@ rpm_repo_search sync-status
 ### 빌드 방법
 
 ```bash
-# 동기화 기능 포함
-cargo build --release --features sync
+# 기본 빌드
+cargo build --release
 
-# 모든 기능 포함
-cargo build --release --features "embedding,mcp,sync"
+# MCP 기능 포함
+cargo build --release --features mcp
 ```
 
 ### 문서
@@ -124,7 +124,7 @@ cargo build --release --features "embedding,mcp,sync"
   - AI 에이전트(Claude Desktop 등)가 RPM 검색 시스템에 접근 가능
   - stdio 기반 JSON-RPC 2.0 통신
   - 5개의 도구 제공: search_packages, get_package_info, list_repositories, compare_versions, get_repository_stats
-  - Optional feature로 제공 (`--features mcp`)
+  - MCP 기능은 `--features mcp`로 활성화
 
 ### 기술적 변경사항
 
@@ -171,6 +171,8 @@ cargo build --release --features mcp
 # MCP 제외 (기본)
 cargo build --release
 ```
+
+**참고**: Embedding과 Sync 기능은 항상 포함됩니다.
 
 ### Claude Desktop 통합
 

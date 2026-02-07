@@ -1,30 +1,19 @@
-#[cfg(feature = "sync")]
 use crate::api::RpmSearchApi;
-#[cfg(feature = "sync")]
 use crate::error::{Result, RpmSearchError};
-#[cfg(feature = "sync")]
 use crate::sync::config::{RepoSyncConfig, RepoSyncState, SyncStatus};
-#[cfg(feature = "sync")]
 use crate::sync::state::SyncStateStore;
-#[cfg(feature = "sync")]
 use chrono::Utc;
-#[cfg(feature = "sync")]
 use std::fs;
-#[cfg(feature = "sync")]
 use std::io::Write;
-#[cfg(feature = "sync")]
 use std::path::PathBuf;
-#[cfg(feature = "sync")]
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "sync")]
 pub struct RepoSyncer {
     api: RpmSearchApi,
     state_store: SyncStateStore,
     work_dir: PathBuf,
 }
 
-#[cfg(feature = "sync")]
 impl RepoSyncer {
     pub fn new(api: RpmSearchApi, state_store: SyncStateStore, work_dir: PathBuf) -> Result<Self> {
         // Create work directory if it doesn't exist
@@ -216,8 +205,7 @@ impl RepoSyncer {
                         b"data" => {
                             // Check if this is primary data
                             for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"type" && &attr.value[..] == b"primary"
-                                {
+                                if attr.key.as_ref() == b"type" && &attr.value[..] == b"primary" {
                                     in_primary = true;
                                 }
                             }
@@ -269,14 +257,12 @@ impl RepoSyncer {
     }
 }
 
-#[cfg(feature = "sync")]
 #[derive(Debug)]
 struct PrimaryFileInfo {
     location: String,
     checksum: String,
 }
 
-#[cfg(feature = "sync")]
 #[derive(Debug)]
 pub struct SyncResult {
     pub changed: bool,

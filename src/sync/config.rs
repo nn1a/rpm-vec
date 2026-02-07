@@ -1,12 +1,8 @@
-#[cfg(feature = "sync")]
 use chrono::{DateTime, Utc};
-#[cfg(feature = "sync")]
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "sync")]
 use std::path::PathBuf;
 
 /// Sync configuration for a repository
-#[cfg(feature = "sync")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoSyncConfig {
     /// Repository name (used as identifier in database)
@@ -24,18 +20,15 @@ pub struct RepoSyncConfig {
     pub enabled: bool,
 }
 
-#[cfg(feature = "sync")]
 fn default_interval() -> u64 {
     3600 // 1 hour
 }
 
-#[cfg(feature = "sync")]
 fn default_enabled() -> bool {
     true
 }
 
 /// Global sync configuration
-#[cfg(feature = "sync")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// List of repositories to sync
@@ -46,17 +39,14 @@ pub struct SyncConfig {
     pub work_dir: PathBuf,
 }
 
-#[cfg(feature = "sync")]
 fn default_work_dir() -> PathBuf {
     PathBuf::from(".rpm-sync")
 }
 
-#[cfg(feature = "sync")]
 impl SyncConfig {
     /// Load sync configuration from TOML file
     pub fn from_file(path: &std::path::Path) -> crate::error::Result<Self> {
-        let content =
-            std::fs::read_to_string(path).map_err(crate::error::RpmSearchError::Io)?;
+        let content = std::fs::read_to_string(path).map_err(crate::error::RpmSearchError::Io)?;
 
         let config: SyncConfig = toml::from_str(&content).map_err(|e| {
             crate::error::RpmSearchError::Config(format!("Invalid sync config: {}", e))
@@ -100,7 +90,6 @@ impl SyncConfig {
 }
 
 /// Repository sync state (tracked in database)
-#[cfg(feature = "sync")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoSyncState {
     pub repo_name: String,
@@ -110,7 +99,6 @@ pub struct RepoSyncState {
     pub last_error: Option<String>,
 }
 
-#[cfg(feature = "sync")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SyncStatus {
     Never,
@@ -119,7 +107,6 @@ pub enum SyncStatus {
     InProgress,
 }
 
-#[cfg(feature = "sync")]
 impl std::fmt::Display for SyncStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

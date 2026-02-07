@@ -182,10 +182,10 @@ cargo build
 cargo build --release
 
 # macOS 최적화 빌드 (Accelerate framework - 권장)
-cargo build --release --features "accelerate"
+cargo build --release --features accelerate
 
-# 전체 기능 빌드 (Accelerate + MCP + Sync)
-cargo build --release --features "accelerate,mcp,sync"
+# 전체 기능 빌드 (Accelerate + MCP)
+cargo build --release --features "accelerate,mcp"
 
 # Embedding 제외
 cargo build --release --no-default-features

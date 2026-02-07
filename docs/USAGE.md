@@ -236,15 +236,6 @@ cargo build --release
 
 ## 문제 해결
 
-### "Embedding feature not enabled" 오류
-
-Embedding 관련 기능을 사용하려면 `--features embedding`로 재빌드해야 합니다:
-
-```bash
-cargo clean
-cargo build --release --features embedding
-```
-
 ### 모델 파일 찾을 수 없음
 
 모델 파일이 올바른 위치에 있는지 확인:

@@ -43,22 +43,19 @@ cd rpm-vec
 cargo build --release
 
 # Build with Apple Accelerate (macOS - recommended for Apple Silicon)
-cargo build --release --features "embedding,accelerate"
+cargo build --release --features accelerate
 
 # Build with NVIDIA GPU acceleration (Linux with CUDA)
-cargo build --release --features "embedding,cuda"
+cargo build --release --features cuda
 
-# Build with all features (Accelerate + MCP + Sync - recommended for macOS)
-cargo build --release --features "embedding,accelerate,mcp,sync"
-
-# Minimal build (without embedding)
-cargo build --release --no-default-features
+# Build with all features (Accelerate + MCP - recommended for macOS)
+cargo build --release --features "accelerate,mcp"
 ```
 
 The compiled binary will be at `target/release/rpm_repo_search`.
 
 **Build Options:**
-- **Default**: Includes embedding support (CPU-only) and sqlite-vec static linking
+- **Default**: Includes embedding support (CPU-only), vector indexing, and automatic repository synchronization with sqlite-vec static linking
 - **`accelerate`**: Enable Apple Accelerate framework optimization (recommended for macOS)
   - Optimized BLAS/LAPACK operations on Apple hardware
   - Significantly faster than plain CPU on macOS
@@ -66,8 +63,6 @@ The compiled binary will be at `target/release/rpm_repo_search`.
   - Automatically falls back to CPU if GPU unavailable
   - Requires CUDA toolkit installed
 - **`mcp`**: Add Model Context Protocol server support
-- **`sync`**: Add automatic repository synchronization
-- **`--no-default-features`**: Minimal build without embedding (~5MB vs ~15MB)
 
 ## Usage
 

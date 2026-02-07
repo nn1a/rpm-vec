@@ -1,21 +1,14 @@
-#[cfg(feature = "embedding")]
 use crate::error::{Result, RpmSearchError};
-#[cfg(feature = "embedding")]
 use candle_core::{Device, Tensor};
-#[cfg(feature = "embedding")]
 use candle_nn::VarBuilder;
-#[cfg(feature = "embedding")]
 use candle_transformers::models::bert::{BertModel, Config};
-#[cfg(feature = "embedding")]
 use std::path::Path;
 
-#[cfg(feature = "embedding")]
 pub struct EmbeddingModel {
     model: BertModel,
     device: Device,
 }
 
-#[cfg(feature = "embedding")]
 impl EmbeddingModel {
     /// Select the best available device (GPU -> CPU fallback)
     fn select_device() -> Device {
@@ -213,29 +206,5 @@ impl EmbeddingModel {
             .map_err(|e| RpmSearchError::Embedding(format!("Conversion failed: {}", e)))?;
 
         Ok(pooled_data)
-    }
-}
-
-#[cfg(not(feature = "embedding"))]
-pub struct EmbeddingModel;
-
-#[cfg(not(feature = "embedding"))]
-impl EmbeddingModel {
-    #[allow(dead_code)]
-    pub fn load<P: AsRef<std::path::Path>>(_model_path: P) -> crate::error::Result<Self> {
-        Err(crate::error::RpmSearchError::ModelLoad(
-            "Embedding feature disabled. Rebuild with default features enabled".to_string(),
-        ))
-    }
-
-    #[allow(dead_code)]
-    pub fn embed_batch(
-        &self,
-        _token_ids: &[Vec<u32>],
-        _attention_masks: &[Vec<u32>],
-    ) -> crate::error::Result<Vec<Vec<f32>>> {
-        Err(crate::error::RpmSearchError::Embedding(
-            "Embedding feature not enabled".to_string(),
-        ))
     }
 }

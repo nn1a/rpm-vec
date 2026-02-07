@@ -169,9 +169,8 @@ impl RpmSearchApi {
         let conn = Connection::open(&self.config.db_path)?;
         let vector_store = VectorStore::new(conn)?;
 
-        #[cfg(feature = "sqlite-vec")]
         if verbose {
-            println!("✓ Using sqlite-vec for accelerated search (statically linked)");
+            println!("✓ Using sqlite-vec for accelerated search");
         }
 
         // Reinitialize (drop + recreate) to ensure clean slate for embedding rebuild

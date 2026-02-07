@@ -2,19 +2,16 @@ use crate::embedding::model::EmbeddingModel;
 use crate::error::{Result, RpmSearchError};
 use std::path::Path;
 
-#[cfg(feature = "embedding")]
 use tokenizers::Tokenizer;
 
 pub struct Embedder {
     #[allow(dead_code)]
     model: EmbeddingModel,
-    #[cfg(feature = "embedding")]
     tokenizer: Tokenizer,
 }
 
 impl Embedder {
     /// Create a new embedder
-    #[cfg(feature = "embedding")]
     pub fn new<P: AsRef<Path>>(model_path: P, tokenizer_path: P) -> Result<Self> {
         let model = EmbeddingModel::load(&model_path)?;
 
@@ -37,15 +34,7 @@ impl Embedder {
         Ok(Self { model, tokenizer })
     }
 
-    #[cfg(not(feature = "embedding"))]
-    pub fn new<P: AsRef<Path>>(_model_path: P, _tokenizer_path: P) -> Result<Self> {
-        Err(RpmSearchError::ModelLoad(
-            "Embedding feature disabled. Rebuild with default features enabled".to_string(),
-        ))
-    }
-
     /// Embed a single text
-    #[cfg(feature = "embedding")]
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let encoding = self
             .tokenizer
@@ -62,15 +51,7 @@ impl Embedder {
             .ok_or_else(|| RpmSearchError::Embedding("No embedding generated".to_string()))
     }
 
-    #[cfg(not(feature = "embedding"))]
-    pub fn embed(&self, _text: &str) -> Result<Vec<f32>> {
-        Err(RpmSearchError::Embedding(
-            "Embedding feature not enabled".to_string(),
-        ))
-    }
-
     /// Embed multiple texts in batch
-    #[cfg(feature = "embedding")]
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
@@ -90,17 +71,9 @@ impl Embedder {
 
         self.model.embed_batch(&token_ids, &attention_masks)
     }
-
-    #[cfg(not(feature = "embedding"))]
-    pub fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        Err(RpmSearchError::Embedding(
-            "Embedding feature not enabled".to_string(),
-        ))
-    }
 }
 
 #[cfg(test)]
-#[cfg(feature = "embedding")]
 mod tests {
     use super::*;
 

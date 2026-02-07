@@ -14,14 +14,12 @@ RPM Repository Vector Search v0.9.0 이상에서는 RPM 저장소의 자동 동�
 
 ## 빌드
 
-동기화 기능은 `sync` feature로 제공됩니다:
-
 ```bash
-# 동기화 기능 포함 빌드
-cargo build --release --features sync
+# 기본 빌드
+cargo build --release
 
-# 모든 기능 포함 (embedding + mcp + sync)
-cargo build --release --features "embedding,mcp,sync"
+# MCP 기능 추가
+cargo build --release --features mcp
 ```
 
 ## 기본 사용법

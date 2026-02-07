@@ -8,7 +8,6 @@ mod normalize;
 mod repomd;
 mod search;
 mod storage;
-#[cfg(feature = "sync")]
 mod sync;
 
 use clap::{Parser, Subcommand};
@@ -115,7 +114,6 @@ enum Commands {
     McpServer,
 
     /// Generate example sync configuration file
-    #[cfg(feature = "sync")]
     SyncInit {
         /// Output file path
         #[arg(short, long, default_value = "sync-config.toml")]
@@ -123,7 +121,6 @@ enum Commands {
     },
 
     /// Perform one-time sync of all repositories
-    #[cfg(feature = "sync")]
     SyncOnce {
         /// Sync configuration file
         #[arg(short, long, default_value = "sync-config.toml")]
@@ -131,7 +128,6 @@ enum Commands {
     },
 
     /// Run sync daemon (continuous background syncing)
-    #[cfg(feature = "sync")]
     SyncDaemon {
         /// Sync configuration file
         #[arg(short, long, default_value = "sync-config.toml")]
@@ -139,7 +135,6 @@ enum Commands {
     },
 
     /// Show sync status for all repositories
-    #[cfg(feature = "sync")]
     SyncStatus,
 
     /// Debug search - diagnose embedding quality
@@ -203,7 +198,6 @@ fn main() -> Result<()> {
     check_and_exec_cuda_version()?;
 
     // Register sqlite-vec extension for all connections (when feature enabled)
-    #[cfg(feature = "sqlite-vec")]
     unsafe {
         use rusqlite::ffi::sqlite3_auto_extension;
         sqlite3_auto_extension(Some(std::mem::transmute::<
@@ -400,7 +394,6 @@ fn main() -> Result<()> {
             server.run()?;
         }
 
-        #[cfg(feature = "sync")]
         Commands::SyncInit { output } => {
             let _span = tracing::info_span!("sync_init", output = %output.display()).entered();
             info!("Generating example sync configuration");
@@ -417,7 +410,6 @@ fn main() -> Result<()> {
             );
         }
 
-        #[cfg(feature = "sync")]
         Commands::SyncOnce {
             config: sync_config_path,
         } => {
@@ -457,7 +449,6 @@ fn main() -> Result<()> {
             println!("✅ Successfully built embeddings for {} packages", count);
         }
 
-        #[cfg(feature = "sync")]
         Commands::SyncDaemon {
             config: sync_config_path,
         } => {
@@ -478,7 +469,6 @@ fn main() -> Result<()> {
             runtime.block_on(scheduler.run_daemon())?;
         }
 
-        #[cfg(feature = "sync")]
         Commands::SyncStatus => {
             let _span = tracing::info_span!("sync_status").entered();
             info!("Retrieving sync status");

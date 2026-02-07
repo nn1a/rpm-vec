@@ -1,31 +1,19 @@
-#[cfg(feature = "sync")]
 use crate::config::Config;
-#[cfg(feature = "sync")]
 use crate::error::Result;
-#[cfg(feature = "sync")]
 use crate::sync::config::SyncConfig;
-#[cfg(feature = "sync")]
 use crate::sync::state::SyncStateStore;
-#[cfg(feature = "sync")]
 use crate::sync::syncer::RepoSyncer;
-#[cfg(feature = "sync")]
 use rusqlite::Connection;
-#[cfg(feature = "sync")]
 use std::collections::HashMap;
-#[cfg(feature = "sync")]
 use std::time::Duration;
-#[cfg(feature = "sync")]
 use tokio::time;
-#[cfg(feature = "sync")]
 use tracing::{error, info, warn};
 
-#[cfg(feature = "sync")]
 pub struct SyncScheduler {
     sync_config: SyncConfig,
     db_config: Config,
 }
 
-#[cfg(feature = "sync")]
 impl SyncScheduler {
     pub fn new(sync_config: SyncConfig, db_config: Config) -> Self {
         Self {

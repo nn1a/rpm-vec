@@ -1,21 +1,14 @@
-#[cfg(feature = "sync")]
 use crate::error::Result;
-#[cfg(feature = "sync")]
 use crate::sync::config::{RepoSyncState, SyncStatus};
-#[cfg(feature = "sync")]
 use chrono::{DateTime, Utc};
-#[cfg(feature = "sync")]
 use rusqlite::Connection;
-#[cfg(feature = "sync")]
 use tracing::{debug, info};
 
 /// Manages repository sync state in the database
-#[cfg(feature = "sync")]
 pub struct SyncStateStore {
     conn: Connection,
 }
 
-#[cfg(feature = "sync")]
 impl SyncStateStore {
     pub fn new(conn: Connection) -> Result<Self> {
         let store = Self { conn };
