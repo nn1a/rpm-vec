@@ -1,0 +1,209 @@
+# MCP 서버 사용 가이드
+
+## 개요
+
+RPM Repository Search는 MCP (Model Context Protocol) 서버로 실행되어 AI 에이전트가 RPM 패키지 검색 시스템에 접근할 수 있도록 합니다.
+
+## 빌드
+
+MCP 기능은 optional feature이므로 명시적으로 활성화해야 합니다:
+
+```bash
+cargo build --release --features mcp
+```
+
+## Claude Desktop 통합
+
+### 1. 설정 파일 수정
+
+Claude Desktop 설정 파일(`~/.config/claude/config.json`)에 MCP 서버 추가:
+
+```json
+{
+  "mcpServers": {
+    "rpm-search": {
+      "command": "/path/to/rpm_repo_search",
+      "args": ["mcp-server", "--db", "/path/to/rpm_search.db"]
+    }
+  }
+}
+```
+
+### 2. Claude Desktop 재시작
+
+설정 변경 후 Claude Desktop을 재시작합니다.
+
+### 3. 사용
+
+채팅에서 자연어로 요청:
+
+```
+"Rocky Linux 9에서 사용 가능한 커널 패키지를 찾아줘"
+"nginx 패키지의 상세 정보를 알려줘"
+"version 1.2.3-1과 1.2.4-1 중 어느 것이 최신인가?"
+```
+
+## 제공 도구 (Tools)
+
+### 1. search_packages
+
+RPM 패키지 검색 (이름, 설명, 의미 기반)
+
+**파라미터:**
+- `query` (필수): 검색 쿼리
+- `arch` (선택): 아키텍처 필터 (예: x86_64, aarch64)
+- `repo` (선택): 저장소 필터
+- `top_k` (선택, 기본값: 10): 최대 결과 수
+
+**예시:**
+```json
+{
+  "name": "search_packages",
+  "arguments": {
+    "query": "kernel",
+    "arch": "x86_64",
+    "repo": "rocky9",
+    "top_k": 5
+  }
+}
+```
+
+### 2. get_package_info
+
+특정 패키지의 상세 정보 조회
+
+**파라미터:**
+- `name` (필수): 패키지 이름
+- `arch` (선택): 아키텍처
+- `repo` (선택): 저장소 이름
+
+**예시:**
+```json
+{
+  "name": "get_package_info",
+  "arguments": {
+    "name": "nginx",
+    "arch": "x86_64"
+  }
+}
+```
+
+### 3. list_repositories
+
+인덱스된 모든 저장소 목록 조회
+
+**파라미터:** 없음
+
+**예시:**
+```json
+{
+  "name": "list_repositories",
+  "arguments": {}
+}
+```
+
+### 4. compare_versions
+
+두 RPM 버전을 rpmvercmp 알고리즘으로 비교
+
+**파라미터:**
+- `version1` (필수): 첫 번째 버전 (epoch:version-release 형식)
+- `version2` (필수): 두 번째 버전
+
+**예시:**
+```json
+{
+  "name": "compare_versions",
+  "arguments": {
+    "version1": "1.2.3-1",
+    "version2": "1.2.4-1"
+  }
+}
+```
+
+### 5. get_repository_stats
+
+특정 저장소의 통계 정보
+
+**파라미터:**
+- `repo` (필수): 저장소 이름
+
+**예시:**
+```json
+{
+  "name": "get_repository_stats",
+  "arguments": {
+    "repo": "rocky9"
+  }
+}
+```
+
+## 직접 테스트
+
+MCP 서버를 stdio 모드로 직접 테스트:
+
+```bash
+# 도구 목록 조회
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | \
+  ./target/release/rpm_repo_search mcp-server
+
+# 패키지 검색
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_packages","arguments":{"query":"kernel","top_k":3}}}' | \
+  ./target/release/rpm_repo_search mcp-server
+```
+
+## 로깅
+
+MCP 서버의 로그는 `RUST_LOG` 환경 변수로 제어:
+
+```bash
+# Claude Desktop config.json에서:
+{
+  "mcpServers": {
+    "rpm-search": {
+      "command": "/path/to/rpm_repo_search",
+      "args": ["mcp-server"],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}
+```
+
+로그 레벨:
+- `error`: 에러만
+- `info`: 기본 정보 (권장)
+- `debug`: 상세 디버깅
+- `trace`: 모든 세부사항
+
+## 문제 해결
+
+### MCP 서버가 나타나지 않음
+
+1. Claude Desktop을 완전히 종료하고 재시작
+2. 설정 파일 경로 확인: `~/.config/claude/config.json` (macOS/Linux)
+3. 바이너리 경로가 절대 경로인지 확인
+4. 데이터베이스 파일이 존재하는지 확인
+
+### 검색 결과가 없음
+
+1. 데이터베이스에 저장소가 인덱스되어 있는지 확인:
+   ```bash
+   ./rpm_repo_search list-repos
+   ```
+
+2. 임베딩이 생성되어 있는지 확인:
+   ```bash
+   ./rpm_repo_search stats
+   ```
+
+### 로그 확인
+
+Claude Desktop의 개발자 도구에서 MCP 관련 로그 확인:
+- Help → Developer Tools → Console
+
+## 참고
+
+- [MCP 프로토콜 사양](https://modelcontextprotocol.io/)
+- [Claude Desktop MCP 가이드](https://docs.anthropic.com/claude/docs/mcp)

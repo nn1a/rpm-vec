@@ -1,0 +1,37 @@
+/target
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Models (too large for git)
+/models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test data
+/test_data/
+*.xml
+*.xml.gz
+*.xml.zst
+
+# Logs
+*.log
+
+# Internal notes (not for commit)
+.restructure-summary.md
+.agent-quickref.md
