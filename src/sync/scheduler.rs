@@ -122,7 +122,27 @@ impl SyncScheduler {
             let mut syncer = RepoSyncer::new(api, state_store, work_dir)?;
 
             // Perform sync
-            syncer.sync_repository(&repo_config)?;
+            let result = syncer.sync_repository(&repo_config)?;
+
+            // Build embeddings incrementally for new packages
+            if result.changed && result.packages_synced > 0 {
+                info!(
+                    repo = %repo_config.name,
+                    packages_synced = result.packages_synced,
+                    "Building embeddings for new packages"
+                );
+                let api = crate::api::RpmSearchApi::new(db_config.clone())?;
+                let embedder = crate::embedding::Embedder::new(
+                    &db_config.model_path,
+                    &db_config.tokenizer_path,
+                )?;
+                let count = api.build_embeddings(&embedder, false, false)?;
+                info!(
+                    repo = %repo_config.name,
+                    new_embeddings = count,
+                    "Incremental embedding build completed"
+                );
+            }
 
             Ok(())
         })

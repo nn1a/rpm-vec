@@ -4,6 +4,7 @@ use serde_json::Value;
 /// JSON-RPC 2.0 Request
 #[derive(Debug, Deserialize)]
 pub struct JsonRpcRequest {
+    #[allow(dead_code)]
     pub jsonrpc: String,
     pub id: Option<Value>,
     pub method: String,
@@ -115,34 +116,6 @@ impl ToolResult {
             is_error: Some(true),
         }
     }
-}
-
-/// MCP Initialize Request Parameters
-#[derive(Debug, Deserialize)]
-pub struct InitializeParams {
-    #[serde(rename = "protocolVersion")]
-    pub protocol_version: String,
-    pub capabilities: ClientCapabilities,
-    #[serde(rename = "clientInfo")]
-    pub client_info: ClientInfo,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ClientCapabilities {
-    #[serde(default)]
-    pub roots: Option<RootsCapability>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RootsCapability {
-    #[serde(rename = "listChanged")]
-    pub list_changed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ClientInfo {
-    pub name: String,
-    pub version: String,
 }
 
 /// MCP Initialize Result

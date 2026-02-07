@@ -79,8 +79,11 @@ cd ../..
 #### 4.2. Embedding 생성
 
 ```bash
-# 기본 실행 (진행률 표시)
+# 인크리멘털 (기본) - 새 패키지만 처리하여 빠름
 ./target/release/rpm_repo_search build-embeddings
+
+# 전체 재빌드 - 모든 임베딩을 삭제하고 다시 생성
+./target/release/rpm_repo_search build-embeddings --rebuild
 
 # 상세 배치 정보 표시
 ./target/release/rpm_repo_search build-embeddings --verbose
@@ -139,6 +142,9 @@ rpm_repo_search index --file <PATH> --repo <NAME>
 ### build-embeddings
 패키지에 대한 벡터 임베딩 생성
 
+기본적으로 인크리멘털 모드로 동작하여 임베딩이 없는 패키지만 처리합니다.
+`--rebuild` 옵션을 사용하면 전체 재빌드합니다.
+
 ```bash
 rpm_repo_search build-embeddings [OPTIONS]
 ```
@@ -147,11 +153,15 @@ rpm_repo_search build-embeddings [OPTIONS]
 - `-m, --model <PATH>`: 모델 디렉토리 (기본값: models/all-MiniLM-L6-v2)
 - `-t, --tokenizer <PATH>`: 토크나이저 파일 (기본값: models/all-MiniLM-L6-v2/tokenizer.json)
 - `-v, --verbose`: 상세한 배치 정보 표시 (기본적으로 진행률은 항상 표시됨)
+- `--rebuild`: 전체 재빌드 (기존 임베딩을 모두 삭제하고 다시 생성)
 
 **예제:**
 ```bash
-# 기본 실행 (진행률 표시)
+# 인크리멘털 (기본) - 새 패키지만 처리
 rpm_repo_search build-embeddings
+
+# 전체 재빌드 - 모델 변경 후 등
+rpm_repo_search build-embeddings --rebuild
 
 # 상세 정보 표시
 rpm_repo_search build-embeddings --verbose

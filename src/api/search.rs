@@ -163,33 +163,82 @@ impl RpmSearchApi {
         Ok(added + updated)
     }
 
-    /// Build embeddings for all packages
-    #[instrument(skip(self, embedder), fields(verbose))]
-    pub fn build_embeddings(&self, embedder: &Embedder, verbose: bool) -> Result<usize> {
+    /// Build embeddings for packages
+    ///
+    /// - `rebuild = false` (default): incremental — only builds for packages missing embeddings
+    /// - `rebuild = true`: full rebuild — drops all embeddings and regenerates from scratch
+    #[instrument(skip(self, embedder), fields(verbose, rebuild))]
+    pub fn build_embeddings(
+        &self,
+        embedder: &Embedder,
+        verbose: bool,
+        rebuild: bool,
+    ) -> Result<usize> {
+        use std::collections::HashSet;
+
         let conn = Connection::open(&self.config.db_path)?;
         let vector_store = VectorStore::new(conn)?;
 
-        if verbose {
-            println!("✓ Using sqlite-vec for accelerated search");
-        }
+        let (pkg_ids, label) = if rebuild {
+            // Full rebuild: drop + recreate
+            if verbose {
+                println!("✓ Full rebuild mode — dropping existing embeddings");
+            }
+            vector_store.reinitialize(self.config.embedding_dim)?;
 
-        // Reinitialize (drop + recreate) to ensure clean slate for embedding rebuild
-        vector_store.reinitialize(self.config.embedding_dim)?;
+            let ids = self.package_store.get_all_pkg_ids()?;
+            let total = ids.len();
+            info!(total, "Starting full embedding rebuild");
+            if verbose {
+                println!("Total packages to process: {}", total);
+            }
+            (ids, "packages")
+        } else {
+            // Incremental: only missing
+            vector_store.ensure_table(self.config.embedding_dim)?;
 
-        let pkg_ids = self.package_store.get_all_pkg_ids()?;
-        let total_packages = pkg_ids.len();
+            let all_ids: HashSet<i64> = self.package_store.get_all_pkg_ids()?.into_iter().collect();
+            let existing_ids: HashSet<i64> = vector_store
+                .get_embedded_pkg_ids()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+
+            let missing: Vec<i64> = all_ids.difference(&existing_ids).copied().collect();
+
+            if missing.is_empty() {
+                info!("All packages already have embeddings, nothing to do");
+                if verbose {
+                    println!("✓ All packages already have embeddings");
+                }
+                return Ok(0);
+            }
+
+            let total = missing.len();
+            info!(
+                total_missing = total,
+                total_existing = existing_ids.len(),
+                "Starting incremental embedding generation"
+            );
+            if verbose {
+                println!(
+                    "Packages needing embeddings: {} (existing: {})",
+                    total,
+                    existing_ids.len()
+                );
+            }
+            (missing, "new packages")
+        };
+
+        let total = pkg_ids.len();
         let batch_size = self.config.batch_size;
-
-        info!(total_packages, batch_size, "Starting embedding generation");
+        let mut count = 0;
+        let total_batches = total.div_ceil(batch_size);
 
         if verbose {
-            println!("Total packages to process: {}", total_packages);
             println!("Batch size: {}", batch_size);
             println!();
         }
-
-        let mut count = 0;
-        let total_batches = total_packages.div_ceil(batch_size);
 
         for (batch_idx, chunk) in pkg_ids.chunks(batch_size).enumerate() {
             let mut texts = Vec::new();
@@ -216,32 +265,30 @@ impl RpmSearchApi {
 
             debug!(batch = batch_idx + 1, total = count, "Stored embeddings");
 
-            // Always show progress (basic)
             if verbose {
-                // Verbose: detailed batch information
                 println!(
                     "Batch {}/{}: Processed {} packages → Total: {}/{} ({:.1}%)",
                     batch_idx + 1,
                     total_batches,
                     texts.len(),
                     count,
-                    total_packages,
-                    (count as f64 / total_packages as f64) * 100.0
+                    total,
+                    (count as f64 / total as f64) * 100.0
                 );
             } else {
-                // Default: simple progress every batch
                 print!(
-                    "\rProcessing: {}/{} packages ({:.1}%)...",
+                    "\rProcessing: {}/{} {} ({:.1}%)...",
                     count,
-                    total_packages,
-                    (count as f64 / total_packages as f64) * 100.0
+                    total,
+                    label,
+                    (count as f64 / total as f64) * 100.0
                 );
                 std::io::Write::flush(&mut std::io::stdout()).ok();
             }
         }
 
         if !verbose {
-            println!(); // New line after progress
+            println!();
         }
 
         info!(total_embeddings = count, "Completed embedding generation");

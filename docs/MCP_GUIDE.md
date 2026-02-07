@@ -142,19 +142,42 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
 
 MCP 서버를 stdio 모드로 직접 테스트:
 
+> **참고**: MCP 모드에서 로그는 자동으로 stderr로 출력되어 stdout의 JSON-RPC 통신을 방해하지 않습니다.
+
 ```bash
-# 도구 목록 조회
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | \
-  ./target/release/rpm_repo_search mcp-server
+# 전체 프로토콜 핸드셰이크 테스트
+echo '{
+  "jsonrpc":"2.0","id":1,"method":"initialize",
+  "params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}
+}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | \
+  ./target/release/rpm_repo_search mcp-server 2>/dev/null
 
 # 패키지 검색
-echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_packages","arguments":{"query":"kernel","top_k":3}}}' | \
-  ./target/release/rpm_repo_search mcp-server
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_packages","arguments":{"query":"kernel","top_k":3}}}' | \
+  ./target/release/rpm_repo_search mcp-server 2>/dev/null
 ```
+
+### 지원 메서드
+
+| 메서드 | 타입 | 설명 |
+|--------|------|------|
+| `initialize` | Request | 서버 초기화 및 capability 교환 |
+| `ping` | Request | 서버 연결 확인 |
+| `tools/list` | Request | 사용 가능한 도구 목록 조회 |
+| `tools/call` | Request | 도구 실행 |
+| `resources/list` | Request | 리소스 목록 (빈 목록 반환) |
+| `prompts/list` | Request | 프롬프트 목록 (빈 목록 반환) |
+| `notifications/initialized` | Notification | 클라이언트 초기화 완료 알림 |
+| `notifications/cancelled` | Notification | 요청 취소 알림 |
 
 ## 로깅
 
-MCP 서버의 로그는 `RUST_LOG` 환경 변수로 제어:
+MCP 서버의 로그는 **stderr**로 출력되어 stdout의 JSON-RPC 통신을 방해하지 않습니다.
+MCP 모드에서 기본 로그 레벨은 `warn`이며, `RUST_LOG` 환경 변수로 조절 가능합니다:
 
 ```bash
 # Claude Desktop config.json에서:

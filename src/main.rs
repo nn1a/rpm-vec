@@ -59,6 +59,10 @@ enum Commands {
         /// Show progress information
         #[arg(short, long)]
         verbose: bool,
+
+        /// Force full rebuild (drop all embeddings and regenerate)
+        #[arg(long)]
+        rebuild: bool,
     },
 
     /// Search packages
@@ -211,13 +215,37 @@ fn main() -> Result<()> {
     }
 
     // Initialize logging with environment variable support (RUST_LOG)
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::filter::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .init();
+    // MCP server mode: logs MUST go to stderr since stdout is the JSON-RPC transport
+    let is_mcp_mode = {
+        #[cfg(feature = "mcp")]
+        {
+            std::env::args().any(|a| a == "mcp-server")
+        }
+        #[cfg(not(feature = "mcp"))]
+        {
+            false
+        }
+    };
+
+    if is_mcp_mode {
+        // MCP mode: write logs to stderr to avoid polluting the JSON-RPC channel on stdout
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::filter::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("warn")),
+            )
+            .with_target(false)
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::filter::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
+            )
+            .with_target(false)
+            .init();
+    }
 
     let cli = Cli::parse();
     let config = Config::new(cli.db);
@@ -244,11 +272,13 @@ fn main() -> Result<()> {
             model,
             tokenizer,
             verbose,
+            rebuild,
         } => {
             let _span = tracing::info_span!("build_embeddings",
                 model = %model.display(),
                 tokenizer = %tokenizer.display(),
-                verbose
+                verbose,
+                rebuild
             )
             .entered();
             info!("Building embeddings");
@@ -258,7 +288,7 @@ fn main() -> Result<()> {
 
             let api = api::RpmSearchApi::new(config.clone())?;
             let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
-            let count = api.build_embeddings(&embedder, verbose)?;
+            let count = api.build_embeddings(&embedder, verbose, rebuild)?;
             info!(count, "Successfully built embeddings");
         }
 
@@ -441,12 +471,16 @@ fn main() -> Result<()> {
                 println!("{:<30} {:<15}", repo, status);
             }
 
-            // Automatically build embeddings after sync
-            println!("\n🔨 Building embeddings...");
+            // Automatically build embeddings incrementally after sync
+            println!("\n🔨 Building embeddings for new packages...");
             let api = api::RpmSearchApi::new(config.clone())?;
             let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
-            let count = api.build_embeddings(&embedder, false)?;
-            println!("✅ Successfully built embeddings for {} packages", count);
+            let count = api.build_embeddings(&embedder, false, false)?;
+            if count > 0 {
+                println!("✅ Built embeddings for {} new packages", count);
+            } else {
+                println!("✅ All embeddings up to date");
+            }
         }
 
         Commands::SyncDaemon {
@@ -542,7 +576,7 @@ fn main() -> Result<()> {
 
             // Get top 20 nearest by L2 distance
             let mut stmt = conn.prepare(
-                "SELECT pkg_id, distance FROM vec_pkg_embedding WHERE embedding MATCH ? ORDER BY distance LIMIT 20"
+                "SELECT pkg_id, distance FROM embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT 20"
             )?;
             let embedding_json = serde_json::to_string(&query_embedding).unwrap();
             let results: Vec<(i64, f64)> = stmt
@@ -595,7 +629,7 @@ fn main() -> Result<()> {
                         // Read stored embedding
                         let emb_row: Option<Vec<u8>> = conn
                             .query_row(
-                                "SELECT embedding FROM vec_pkg_embedding WHERE pkg_id = ?",
+                                "SELECT embedding FROM embeddings WHERE pkg_id = ?",
                                 [pkg_id],
                                 |row| row.get(0),
                             )

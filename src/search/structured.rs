@@ -39,11 +39,13 @@ impl<'a> StructuredSearch<'a> {
     }
 
     /// Filter packages by architecture
+    #[allow(dead_code)]
     pub fn filter_by_arch(&self, packages: Vec<Package>, arch: &str) -> Vec<Package> {
         packages.into_iter().filter(|p| p.arch == arch).collect()
     }
 
     /// Filter packages that do NOT require a specific dependency
+    #[allow(dead_code)]
     pub fn filter_not_requiring(&self, packages: Vec<Package>, dep_name: &str) -> Vec<Package> {
         packages
             .into_iter()
@@ -52,6 +54,7 @@ impl<'a> StructuredSearch<'a> {
     }
 
     /// Filter packages that provide a specific capability
+    #[allow(dead_code)]
     pub fn filter_providing(&self, packages: Vec<Package>, capability: &str) -> Vec<Package> {
         packages
             .into_iter()

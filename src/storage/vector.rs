@@ -11,46 +11,26 @@ impl VectorStore {
         Ok(Self { conn })
     }
 
-    /// Initialize vector table (sqlite-vec if feature enabled, fallback otherwise)
-    pub fn initialize(&self, dimension: usize) -> Result<()> {
-        // Use sqlite-vec virtual table (statically linked)
-        self.conn.execute(
-            &format!(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_pkg_embedding USING vec0(
-                        pkg_id INTEGER PRIMARY KEY,
-                        embedding FLOAT[{}]
-                    )",
-                dimension
-            ),
-            [],
-        )?;
-
-        Ok(())
-    }
-
     /// Reinitialize vector table (drop and recreate) - used when rebuilding embeddings
     pub fn reinitialize(&self, dimension: usize) -> Result<()> {
         use tracing::{debug, info};
 
         // Try to delete all existing rows first
-        match self.conn.execute("DELETE FROM vec_pkg_embedding", []) {
+        match self.conn.execute("DELETE FROM embeddings", []) {
             Ok(n) => info!(deleted = n, "Cleared existing vector embeddings"),
-            Err(e) => debug!("No existing vec_pkg_embedding to clear: {}", e),
+            Err(e) => debug!("No existing embeddings table to clear: {}", e),
         }
 
         // Drop the table completely to get a fresh start
-        match self
-            .conn
-            .execute("DROP TABLE IF EXISTS vec_pkg_embedding", [])
-        {
-            Ok(_) => info!("Dropped vec_pkg_embedding table"),
-            Err(e) => debug!("Could not drop vec_pkg_embedding: {}", e),
+        match self.conn.execute("DROP TABLE IF EXISTS embeddings", []) {
+            Ok(_) => info!("Dropped embeddings table"),
+            Err(e) => debug!("Could not drop embeddings table: {}", e),
         }
 
         // Recreate the virtual table
         self.conn.execute(
             &format!(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_pkg_embedding USING vec0(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
                         pkg_id INTEGER PRIMARY KEY,
                         embedding FLOAT[{}]
                     )",
@@ -58,9 +38,40 @@ impl VectorStore {
             ),
             [],
         )?;
-        info!(dimension, "Created fresh vec_pkg_embedding table");
+        info!(dimension, "Created fresh embeddings table");
 
         Ok(())
+    }
+
+    /// Ensure embeddings table exists (create if not, keep data if it does)
+    pub fn ensure_table(&self, dimension: usize) -> Result<()> {
+        self.conn.execute(
+            &format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
+                        pkg_id INTEGER PRIMARY KEY,
+                        embedding FLOAT[{}]
+                    )",
+                dimension
+            ),
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Get all pkg_ids that already have embeddings
+    pub fn get_embedded_pkg_ids(&self) -> Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT pkg_id FROM embeddings")
+            .map_err(|e| {
+                RpmSearchError::Storage(format!("Failed to query embeddings table: {}", e))
+            })?;
+
+        let ids = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<i64>, _>>()?;
+
+        Ok(ids)
     }
 
     /// Insert or update embedding for a package
@@ -71,7 +82,7 @@ impl VectorStore {
         })?;
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO vec_pkg_embedding (pkg_id, embedding) VALUES (?, ?)",
+            "INSERT OR REPLACE INTO embeddings (pkg_id, embedding) VALUES (?, ?)",
             rusqlite::params![pkg_id, embedding_json],
         )?;
 
@@ -95,7 +106,7 @@ impl VectorStore {
 
         let mut stmt = self.conn.prepare(
             "SELECT pkg_id, distance 
-                 FROM vec_pkg_embedding 
+                 FROM embeddings 
                  WHERE embedding MATCH ? 
                  ORDER BY distance 
                  LIMIT ?",
@@ -143,7 +154,7 @@ impl VectorStore {
 
         let mut stmt = self.conn.prepare(
             "SELECT pkg_id, distance 
-                 FROM vec_pkg_embedding 
+                 FROM embeddings 
                  WHERE embedding MATCH ?
                  ORDER BY distance
                  LIMIT ?",

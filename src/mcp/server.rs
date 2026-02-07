@@ -29,7 +29,7 @@ impl McpServer {
         let mut stdout = std::io::stdout();
 
         for line in reader.lines() {
-            let line = line.map_err(|e| RpmSearchError::Io(e))?;
+            let line = line.map_err(RpmSearchError::Io)?;
 
             if line.trim().is_empty() {
                 continue;
@@ -37,11 +37,27 @@ impl McpServer {
 
             debug!("Received: {}", line);
 
+            // Parse the raw JSON to check if it's a notification (no "id" field)
+            let raw: Value = serde_json::from_str(&line)
+                .map_err(|e| RpmSearchError::Config(format!("Invalid JSON: {}", e)))?;
+
+            let is_notification = raw.get("id").is_none_or(|v| v.is_null());
+
+            if is_notification {
+                // JSON-RPC 2.0: Notifications MUST NOT be responded to
+                self.handle_notification(&raw);
+                continue;
+            }
+
             let response = match self.handle_request(&line) {
                 Ok(resp) => resp,
                 Err(e) => {
                     error!("Error handling request: {}", e);
-                    JsonRpcResponse::error(None, -32603, format!("Internal error: {}", e))
+                    JsonRpcResponse::error(
+                        raw.get("id").cloned(),
+                        -32603,
+                        format!("Internal error: {}", e),
+                    )
                 }
             };
 
@@ -50,11 +66,35 @@ impl McpServer {
             })?;
 
             debug!("Sending: {}", response_json);
-            writeln!(stdout, "{}", response_json).map_err(|e| RpmSearchError::Io(e))?;
-            stdout.flush().map_err(|e| RpmSearchError::Io(e))?;
+            writeln!(stdout, "{}", response_json).map_err(RpmSearchError::Io)?;
+            stdout.flush().map_err(RpmSearchError::Io)?;
         }
 
         Ok(())
+    }
+
+    /// Handle JSON-RPC notifications (no response expected)
+    fn handle_notification(&self, raw: &Value) {
+        let method = raw
+            .get("method")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown");
+
+        match method {
+            "notifications/initialized" => {
+                info!("Client initialized successfully");
+            }
+            "notifications/cancelled" => {
+                let request_id = raw
+                    .pointer("/params/requestId")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                debug!("Client cancelled request: {}", request_id);
+            }
+            _ => {
+                debug!("Unhandled notification: {}", method);
+            }
+        }
     }
 
     fn handle_request(&self, line: &str) -> Result<JsonRpcResponse> {
@@ -67,6 +107,10 @@ impl McpServer {
                 serde_json::to_value(init_result)
                     .map_err(|e| RpmSearchError::Storage(format!("Serialization error: {}", e)))?
             }
+            "ping" => {
+                // MCP spec: ping returns empty object
+                serde_json::json!({})
+            }
             "tools/list" => {
                 let tools = get_tools();
                 let result = ToolsListResult { tools };
@@ -74,6 +118,18 @@ impl McpServer {
                     .map_err(|e| RpmSearchError::Storage(format!("Serialization error: {}", e)))?
             }
             "tools/call" => self.handle_tool_call(&request.params)?,
+            "resources/list" => {
+                // Return empty resources list for compatibility
+                serde_json::json!({ "resources": [] })
+            }
+            "resources/templates/list" => {
+                // Return empty resource templates list
+                serde_json::json!({ "resourceTemplates": [] })
+            }
+            "prompts/list" => {
+                // Return empty prompts list for compatibility
+                serde_json::json!({ "prompts": [] })
+            }
             _ => {
                 return Ok(JsonRpcResponse::error(
                     request.id,

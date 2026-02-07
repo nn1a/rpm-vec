@@ -106,8 +106,11 @@ cd ../..
 **Build embeddings:**
 
 ```bash
-# Basic usage (shows progress)
+# Incremental (default) - only builds for new packages
 ./rpm_repo_search build-embeddings
+
+# Full rebuild - drop all embeddings and regenerate
+./rpm_repo_search build-embeddings --rebuild
 
 # With detailed batch information
 ./rpm_repo_search build-embeddings --verbose
@@ -214,18 +217,24 @@ Index RPM repository metadata from primary.xml file.
 ```
 
 ### `build-embeddings`
-Generate vector embeddings for all indexed packages.
+Generate vector embeddings for indexed packages.
+
+By default, runs incrementally — only generates embeddings for packages that don't have one yet. Use `--rebuild` to force a full rebuild.
 
 **Options:**
 - `-m, --model <PATH>`: Model directory (default: models/all-MiniLM-L6-v2)
 - `-t, --tokenizer <PATH>`: Tokenizer file (default: models/all-MiniLM-L6-v2/tokenizer.json)
 - `-v, --verbose`: Show detailed batch information (progress is always shown)
+- `--rebuild`: Force full rebuild (drop all embeddings and regenerate)
 
 **Examples:**
 
 ```bash
-# Basic usage
+# Incremental (default) - fast, only processes new packages
 ./rpm_repo_search build-embeddings
+
+# Full rebuild - useful after model changes
+./rpm_repo_search build-embeddings --rebuild
 
 # With logging to see which device is being used
 RUST_LOG=info ./rpm_repo_search build-embeddings
