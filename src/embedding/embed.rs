@@ -53,7 +53,8 @@ impl Embedder {
             .map_err(|e| RpmSearchError::Embedding(format!("Tokenization failed: {}", e)))?;
 
         let token_ids = encoding.get_ids().to_vec();
-        let embeddings = self.model.embed_batch(&[token_ids])?;
+        let attention_mask = encoding.get_attention_mask().to_vec();
+        let embeddings = self.model.embed_batch(&[token_ids], &[attention_mask])?;
 
         embeddings
             .into_iter()
@@ -82,8 +83,12 @@ impl Embedder {
             .map_err(|e| RpmSearchError::Embedding(format!("Batch tokenization failed: {}", e)))?;
 
         let token_ids: Vec<Vec<u32>> = encodings.iter().map(|e| e.get_ids().to_vec()).collect();
+        let attention_masks: Vec<Vec<u32>> = encodings
+            .iter()
+            .map(|e| e.get_attention_mask().to_vec())
+            .collect();
 
-        self.model.embed_batch(&token_ids)
+        self.model.embed_batch(&token_ids, &attention_masks)
     }
 
     #[cfg(not(feature = "embedding"))]

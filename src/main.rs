@@ -141,9 +141,67 @@ enum Commands {
     /// Show sync status for all repositories
     #[cfg(feature = "sync")]
     SyncStatus,
+
+    /// Debug search - diagnose embedding quality
+    DebugSearch {
+        /// Search query
+        query: String,
+
+        /// Specific pkg_ids to check (comma-separated)
+        #[arg(long)]
+        pkg_ids: Option<String>,
+    },
+}
+
+/// Check if CUDA is available and exec CUDA version of the binary if it is
+#[cfg(not(feature = "cuda"))]
+fn check_and_exec_cuda_version() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+
+    // Try to load CUDA runtime library
+    let cuda_available = unsafe {
+        !libc::dlopen(
+            c"libcuda.so.1".as_ptr(),
+            libc::RTLD_LAZY | libc::RTLD_GLOBAL,
+        )
+        .is_null()
+            || !libc::dlopen(c"libcuda.so".as_ptr(), libc::RTLD_LAZY | libc::RTLD_GLOBAL).is_null()
+    };
+
+    if cuda_available {
+        // Get the path to the current executable
+        let exe_path = std::env::current_exe()?;
+
+        // Look for _cuda variant in the same directory
+        let cuda_binary = exe_path.parent().map(|p| p.join("rpm_repo_search_cuda"));
+
+        if let Some(cuda_bin) = cuda_binary {
+            if cuda_bin.exists() {
+                tracing::debug!("CUDA detected, executing CUDA version");
+
+                // Replace current process with CUDA version
+                let err = Command::new(&cuda_bin)
+                    .args(std::env::args_os().skip(1))
+                    .exec();
+
+                // exec() should never return on success; if it does, error
+                return Err(error::RpmSearchError::Config(format!(
+                    "Failed to exec CUDA binary: {}",
+                    err
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
+    // Check if CUDA is available and exec CUDA version if it is
+    #[cfg(not(feature = "cuda"))]
+    check_and_exec_cuda_version()?;
+
     // Register sqlite-vec extension for all connections (when feature enabled)
     #[cfg(feature = "sqlite-vec")]
     unsafe {
@@ -238,15 +296,21 @@ fn main() -> Result<()> {
                 providing,
             };
 
-            let packages = api.search(&query, filters)?;
+            let result = api.search_with_scores(&query, filters)?;
 
-            info!(count = packages.len(), "Search completed");
+            info!(count = result.packages.len(), "Search completed");
 
             // Output results to stdout (not logged)
-            println!("\nFound {} packages:\n", packages.len());
-            for pkg in packages {
+            println!("\nFound {} packages:\n", result.packages.len());
+            for (i, pkg) in result.packages.iter().enumerate() {
+                let score = result.scores.get(i).copied().unwrap_or(0.0);
                 println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                println!("📦 {} - {}", pkg.name, pkg.full_version());
+                println!(
+                    "📦 {} - {}  (score: {:.3})",
+                    pkg.name,
+                    pkg.full_version(),
+                    score
+                );
                 println!("   Architecture: {}", pkg.arch);
                 println!("   Repository: {}", pkg.repo);
                 println!("   Summary: {}", pkg.summary);
@@ -362,7 +426,7 @@ fn main() -> Result<()> {
             info!("Performing one-time sync");
 
             let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
-            let scheduler = sync::SyncScheduler::new(sync_config, config);
+            let scheduler = sync::SyncScheduler::new(sync_config, config.clone());
 
             let runtime = tokio::runtime::Runtime::new().map_err(|e| {
                 error::RpmSearchError::Config(format!("Failed to create runtime: {}", e))
@@ -384,6 +448,13 @@ fn main() -> Result<()> {
                 };
                 println!("{:<30} {:<15}", repo, status);
             }
+
+            // Automatically build embeddings after sync
+            println!("\n🔨 Building embeddings...");
+            let api = api::RpmSearchApi::new(config.clone())?;
+            let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
+            let count = api.build_embeddings(&embedder, false)?;
+            println!("✅ Successfully built embeddings for {} packages", count);
         }
 
         #[cfg(feature = "sync")]
@@ -412,7 +483,7 @@ fn main() -> Result<()> {
             let _span = tracing::info_span!("sync_status").entered();
             info!("Retrieving sync status");
 
-            let conn = rusqlite::Connection::open(&db_path)?;
+            let conn = rusqlite::Connection::open(&config.db_path)?;
             let state_store = sync::SyncStateStore::new(conn)?;
             let states = state_store.list_states()?;
 
@@ -456,6 +527,197 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::DebugSearch { query, pkg_ids } => {
+            let mut config = config;
+            config.top_k = 10;
+
+            let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
+
+            // Embed the query
+            let query_embedding = embedder.embed(&query)?;
+            let norm: f32 = query_embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+            println!("Query: \"{}\"", query);
+            println!("Query embedding norm: {:.6} (should be ~1.0)", norm);
+            println!(
+                "Query embedding first 10 dims: {:?}",
+                &query_embedding[..10]
+            );
+            println!();
+
+            // Open vector store and get raw distances
+            let conn = rusqlite::Connection::open(&config.db_path)?;
+            let pkg_conn = rusqlite::Connection::open(&config.db_path)?;
+
+            // Get top 20 nearest by L2 distance
+            let mut stmt = conn.prepare(
+                "SELECT pkg_id, distance FROM vec_pkg_embedding WHERE embedding MATCH ? ORDER BY distance LIMIT 20"
+            )?;
+            let embedding_json = serde_json::to_string(&query_embedding).unwrap();
+            let results: Vec<(i64, f64)> = stmt
+                .query_map(rusqlite::params![embedding_json], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?
+                .collect::<std::result::Result<_, _>>()?;
+
+            println!("Top 20 nearest by raw L2 distance:");
+            println!(
+                "{:<8} {:<12} {:<12} {:<40} {:<20}",
+                "pkg_id", "L2_dist", "cos_sim", "name", "summary"
+            );
+            println!("{}", "─".repeat(92));
+            for (pkg_id, dist) in &results {
+                let cos_sim = 1.0 - dist * dist / 2.0;
+                let cos_sim = cos_sim.clamp(0.0, 1.0);
+
+                let name_summary: (String, String) = pkg_conn
+                    .query_row(
+                        "SELECT name, summary FROM packages WHERE pkg_id = ?",
+                        [pkg_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap_or(("?".to_string(), "?".to_string()));
+
+                println!(
+                    "{:<8} {:<12.6} {:<12.6} {:<40} {:<20}",
+                    pkg_id,
+                    dist,
+                    cos_sim,
+                    if name_summary.0.len() > 38 {
+                        format!("{}...", &name_summary.0[..35])
+                    } else {
+                        name_summary.0.clone()
+                    },
+                    if name_summary.1.len() > 18 {
+                        format!("{}...", &name_summary.1[..15])
+                    } else {
+                        name_summary.1.clone()
+                    }
+                );
+            }
+
+            // Also check specific packages if requested
+            if let Some(ids_str) = pkg_ids {
+                println!("\nSpecific package checks:");
+                for id_str in ids_str.split(',') {
+                    if let Ok(pkg_id) = id_str.trim().parse::<i64>() {
+                        // Read stored embedding
+                        let emb_row: Option<Vec<u8>> = conn
+                            .query_row(
+                                "SELECT embedding FROM vec_pkg_embedding WHERE pkg_id = ?",
+                                [pkg_id],
+                                |row| row.get(0),
+                            )
+                            .ok();
+
+                        if let Some(blob) = emb_row {
+                            let stored: Vec<f32> = blob
+                                .chunks_exact(4)
+                                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                                .collect();
+                            let stored_norm: f32 = stored.iter().map(|x| x * x).sum::<f32>().sqrt();
+                            let dot: f32 = query_embedding
+                                .iter()
+                                .zip(stored.iter())
+                                .map(|(a, b)| a * b)
+                                .sum();
+                            let cos_sim = dot / (norm * stored_norm);
+
+                            let name: String = pkg_conn
+                                .query_row(
+                                    "SELECT name FROM packages WHERE pkg_id = ?",
+                                    [pkg_id],
+                                    |row| row.get(0),
+                                )
+                                .unwrap_or("?".to_string());
+
+                            println!("  pkg_id={}: name={}, stored_norm={:.6}, dot={:.6}, cos_sim={:.6}, first_10={:?}",
+                                pkg_id, name, stored_norm, dot, cos_sim, &stored[..10.min(stored.len())]);
+                        } else {
+                            println!("  pkg_id={}: no embedding found", pkg_id);
+                        }
+                    }
+                }
+            }
+
+            // Embed a few reference texts and compare
+            println!("\nReference embedding similarities:");
+            let ref_texts = vec![
+                query.clone(),
+                "Package: libopenssl11\nName: libopenssl11\nSummary: Secure Sockets Layer and cryptography libraries".to_string(),
+                "Package: doc\nName: doc\nSummary: Document\nDescription: Example files".to_string(),
+                "Package: gcc-contrib\nName: gcc-contrib\nSummary: GCC related scripts".to_string(),
+            ];
+            let ref_labels = [
+                "query (self)",
+                "libopenssl11-like",
+                "doc-like",
+                "gcc-contrib-like",
+            ];
+            let ref_embeddings = embedder.embed_batch(&ref_texts)?;
+
+            for (label, emb) in ref_labels.iter().zip(ref_embeddings.iter()) {
+                let n: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                let dot: f32 = query_embedding
+                    .iter()
+                    .zip(emb.iter())
+                    .map(|(a, b)| a * b)
+                    .sum();
+                let sim = dot / (norm * n);
+                println!("  {} → norm={:.6}, cos_sim_with_query={:.6}", label, n, sim);
+            }
+
+            // CRITICAL TEST: Compare single vs batch embedding for same text
+            println!("\n=== Single vs Batch Embedding Comparison ===");
+            let test_text = "Package: libopenssl11\nName: libopenssl11\nArchitecture: armv7l\nSummary: Secure Sockets Layer and cryptography libraries\nDescription: This package contains the OpenSSL shared libraries.";
+            let single_emb = embedder.embed(test_text)?;
+            let batch_emb = embedder.embed_batch(&[test_text.to_string()])?;
+            let batch_emb1 = &batch_emb[0];
+
+            let single_norm: f32 = single_emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let batch_norm: f32 = batch_emb1.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let cross_dot: f32 = single_emb
+                .iter()
+                .zip(batch_emb1.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            let cross_sim = cross_dot / (single_norm * batch_norm);
+
+            println!("  Single embed norm: {:.6}", single_norm);
+            println!("  Batch(1) embed norm: {:.6}", batch_norm);
+            println!(
+                "  Cos sim (single vs batch): {:.6} (should be ~1.0)",
+                cross_sim
+            );
+            println!("  Single first 5: {:?}", &single_emb[..5]);
+            println!("  Batch  first 5: {:?}", &batch_emb1[..5]);
+
+            // Test with actual batch of 4 texts
+            let batch4 = vec![
+                test_text.to_string(),
+                "Package: doc\nName: doc\nSummary: Document\nDescription: Example files"
+                    .to_string(),
+                "Package: gcc-contrib\nName: gcc-contrib\nSummary: GCC related scripts".to_string(),
+                "Package: zlib\nName: zlib\nSummary: Compression library".to_string(),
+            ];
+            let batch4_emb = embedder.embed_batch(&batch4)?;
+            let batch4_first = &batch4_emb[0]; // Should be same text as single_emb
+
+            let cross_dot2: f32 = single_emb
+                .iter()
+                .zip(batch4_first.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            let b4_norm: f32 = batch4_first.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let cross_sim2 = cross_dot2 / (single_norm * b4_norm);
+
+            println!("\n  Batch(4)[0] norm: {:.6}", b4_norm);
+            println!(
+                "  Cos sim (single vs batch4[0]): {:.6} (should be ~1.0)",
+                cross_sim2
+            );
+            println!("  Batch4[0] first 5: {:?}", &batch4_first[..5]);
         }
     }
 

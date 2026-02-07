@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::normalize::Package;
 use crate::search::{SemanticSearch, StructuredSearch};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
@@ -22,9 +23,15 @@ pub struct SearchFilters {
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub packages: Vec<Package>,
-    #[allow(dead_code)]
     pub scores: Vec<f32>,
 }
+
+/// Weight configuration for hybrid scoring
+const STRUCTURED_WEIGHT: f32 = 0.45;
+const SEMANTIC_WEIGHT: f32 = 0.55;
+
+/// Minimum score threshold - results below this are filtered out
+const MIN_SCORE_THRESHOLD: f32 = 0.15;
 
 pub struct QueryPlanner<'a> {
     semantic_search: SemanticSearch,
@@ -45,13 +52,13 @@ impl<'a> QueryPlanner<'a> {
         }
     }
 
-    /// Execute a search query with planning
+    /// Execute a search query with hybrid planning (structured + semantic)
     pub fn search(&self, query: SearchQuery) -> Result<SearchResult> {
         use tracing::{debug, info};
 
         let top_k = query.top_k.unwrap_or(self.default_top_k);
 
-        // Step 1: If exact name search is requested, use structured search only
+        // Step 1: If exact name filter is requested, use structured search only
         if let Some(ref name) = query.filters.name {
             if query.query_text.is_empty() {
                 let packages = self.structured_search.search_by_name(name)?;
@@ -60,17 +67,31 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Step 2: Pre-filtering optimization - reduce search space with SQL filters
+        // Step 2: Hybrid search - run BOTH structured and semantic in parallel
+        // The key insight: always run both and combine results
+
+        // 2a: Structured search with ranked scoring
+        let structured_results = self
+            .structured_search
+            .search_by_name_ranked(&query.query_text)?;
+        debug!(
+            structured_count = structured_results.len(),
+            "Structured search results"
+        );
+
+        // 2b: Semantic/vector search
+        // Expand search to get more candidates for merging
+        let semantic_top_k = (top_k * 3).max(30);
+
         let use_prefilter = query.filters.arch.is_some() || query.filters.repo.is_some();
 
         let vector_results = if use_prefilter {
-            // Get candidate pkg_ids using SQL filters (arch, repo)
             let candidates = self.structured_search.get_filtered_candidates(
                 query.filters.arch.as_deref(),
                 query.filters.repo.as_deref(),
             )?;
 
-            info!(
+            debug!(
                 total_candidates = candidates.len(),
                 arch = ?query.filters.arch,
                 repo = ?query.filters.repo,
@@ -78,54 +99,99 @@ impl<'a> QueryPlanner<'a> {
             );
 
             if candidates.is_empty() {
-                debug!("No candidates after pre-filtering");
-                return Ok(SearchResult {
-                    packages: vec![],
-                    scores: vec![],
-                });
+                vec![]
+            } else {
+                self.semantic_search.search_filtered(
+                    &query.query_text,
+                    &candidates,
+                    semantic_top_k,
+                )?
             }
-
-            // Vector search only on filtered candidates
-            self.semantic_search
-                .search_filtered(&query.query_text, &candidates, top_k)?
         } else {
-            // Full vector search (no pre-filtering)
-            debug!("Full vector search (no pre-filters)");
-            self.semantic_search.search(&query.query_text, top_k)?
+            self.semantic_search
+                .search(&query.query_text, semantic_top_k)?
         };
 
-        let pkg_ids: Vec<i64> = vector_results.iter().map(|(id, _)| *id).collect();
-        let scores: Vec<f32> = vector_results.iter().map(|(_, score)| *score).collect();
+        debug!(
+            semantic_count = vector_results.len(),
+            "Semantic search results"
+        );
 
-        // Step 3: Get package details
-        let mut packages = self.structured_search.get_packages(&pkg_ids)?;
+        // Step 3: Merge and score results
+        // Use a HashMap to combine scores from both sources
+        let mut combined_scores: HashMap<i64, f32> = HashMap::new();
 
-        // Step 4: Apply filters
-        if let Some(ref arch) = query.filters.arch {
-            packages = self.structured_search.filter_by_arch(packages, arch);
+        // Normalize structured scores (already 0-1 from search_by_name_ranked)
+        for (pkg_id, score) in &structured_results {
+            let weighted = score * STRUCTURED_WEIGHT;
+            let entry = combined_scores.entry(*pkg_id).or_insert(0.0);
+            *entry += weighted;
         }
 
-        if let Some(ref not_requiring) = query.filters.not_requiring {
-            packages = self
-                .structured_search
-                .filter_not_requiring(packages, not_requiring);
+        // Semantic scores are now proper cosine similarity in [0, 1] range
+        // Use raw scores directly (no min-max normalization to preserve absolute quality)
+        for (pkg_id, cos_sim) in &vector_results {
+            let weighted = cos_sim * SEMANTIC_WEIGHT;
+            let entry = combined_scores.entry(*pkg_id).or_insert(0.0);
+            *entry += weighted;
         }
 
-        if let Some(ref providing) = query.filters.providing {
-            packages = self.structured_search.filter_providing(packages, providing);
+        // Step 4: Sort by combined score
+        let mut scored_results: Vec<(i64, f32)> = combined_scores.into_iter().collect();
+        scored_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Filter by minimum threshold
+        scored_results.retain(|(_, score)| *score >= MIN_SCORE_THRESHOLD);
+
+        // Limit to top_k
+        scored_results.truncate(top_k);
+
+        debug!(
+            combined_count = scored_results.len(),
+            "Combined hybrid results"
+        );
+
+        // Step 5: Load package details and apply post-filters
+        let mut final_packages: Vec<(Package, f32)> = Vec::new();
+
+        for (pkg_id, score) in &scored_results {
+            if let Some(pkg) = self.structured_search.get_package(*pkg_id)? {
+                // Apply post-filters
+                if let Some(ref arch) = query.filters.arch {
+                    if pkg.arch != *arch {
+                        continue;
+                    }
+                }
+                if let Some(ref repo) = query.filters.repo {
+                    if pkg.repo != *repo {
+                        continue;
+                    }
+                }
+                if let Some(ref not_requiring) = query.filters.not_requiring {
+                    if pkg.requires.iter().any(|r| r.name == *not_requiring) {
+                        continue;
+                    }
+                }
+                if let Some(ref providing) = query.filters.providing {
+                    if !pkg.provides.iter().any(|prov| prov.name == *providing) {
+                        continue;
+                    }
+                }
+                final_packages.push((pkg, *score));
+            }
         }
 
-        if let Some(ref repo) = query.filters.repo {
-            packages.retain(|p| &p.repo == repo);
-        }
+        let packages: Vec<Package> = final_packages.iter().map(|(p, _)| p.clone()).collect();
+        let scores: Vec<f32> = final_packages.iter().map(|(_, s)| *s).collect();
 
-        // Adjust scores based on filtered results
-        let final_scores = scores[..packages.len().min(scores.len())].to_vec();
+        info!(
+            results = packages.len(),
+            structured_hits = structured_results.len(),
+            semantic_hits = vector_results.len(),
+            "Hybrid search completed"
+        );
 
-        Ok(SearchResult {
-            packages,
-            scores: final_scores,
-        })
+        Ok(SearchResult { packages, scores })
     }
 
     /// Simple search by name only

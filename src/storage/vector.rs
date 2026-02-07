@@ -43,6 +43,56 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Reinitialize vector table (drop and recreate) - used when rebuilding embeddings
+    pub fn reinitialize(&self, dimension: usize) -> Result<()> {
+        #[cfg(feature = "sqlite-vec")]
+        {
+            use tracing::{debug, info};
+
+            // Try to delete all existing rows first
+            match self.conn.execute("DELETE FROM vec_pkg_embedding", []) {
+                Ok(n) => info!(deleted = n, "Cleared existing vector embeddings"),
+                Err(e) => debug!("No existing vec_pkg_embedding to clear: {}", e),
+            }
+
+            // Drop the table completely to get a fresh start
+            match self
+                .conn
+                .execute("DROP TABLE IF EXISTS vec_pkg_embedding", [])
+            {
+                Ok(_) => info!("Dropped vec_pkg_embedding table"),
+                Err(e) => debug!("Could not drop vec_pkg_embedding: {}", e),
+            }
+
+            // Recreate the virtual table
+            self.conn.execute(
+                &format!(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS vec_pkg_embedding USING vec0(
+                        pkg_id INTEGER PRIMARY KEY,
+                        embedding FLOAT[{}]
+                    )",
+                    dimension
+                ),
+                [],
+            )?;
+            info!(dimension, "Created fresh vec_pkg_embedding table");
+        }
+
+        #[cfg(not(feature = "sqlite-vec"))]
+        {
+            let _ = self.conn.execute("DROP TABLE IF EXISTS pkg_embedding", []);
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS pkg_embedding (
+                    pkg_id INTEGER PRIMARY KEY,
+                    embedding BLOB NOT NULL
+                )",
+                [],
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Insert or update embedding for a package
     pub fn insert_embedding(&self, pkg_id: i64, embedding: &[f32]) -> Result<()> {
         #[cfg(feature = "sqlite-vec")]
@@ -131,10 +181,15 @@ impl VectorStore {
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
 
-            // Convert distance to similarity (1 - distance for cosine)
+            // Convert L2 distance to cosine similarity for normalized vectors:
+            // L2_dist = sqrt(2 * (1 - cos_sim))
+            // cos_sim = 1 - L2_dist^2 / 2
             let similarities: Vec<(i64, f32)> = results
                 .into_iter()
-                .map(|(id, dist)| (id, 1.0 - dist))
+                .map(|(id, dist)| {
+                    let cos_sim = (1.0 - dist * dist / 2.0).clamp(0.0, 1.0);
+                    (id, cos_sim)
+                })
                 .collect();
 
             Ok(similarities)
@@ -183,8 +238,10 @@ impl VectorStore {
 
         #[cfg(feature = "sqlite-vec")]
         {
-            // With sqlite-vec, we still do full scan then filter
-            // because sqlite-vec doesn't support filtered KNN yet
+            // With sqlite-vec, we do a broader scan then filter by candidates
+            // Request more results to account for filtered-out candidates
+            let scan_limit = (top_k * 10).max(200);
+
             let embedding_json = serde_json::to_string(query_embedding).map_err(|e| {
                 RpmSearchError::Storage(format!("Failed to serialize query embedding: {}", e))
             })?;
@@ -192,18 +249,26 @@ impl VectorStore {
             let mut stmt = self.conn.prepare(
                 "SELECT pkg_id, distance 
                  FROM vec_pkg_embedding 
-                 WHERE embedding MATCH ?",
+                 WHERE embedding MATCH ?
+                 ORDER BY distance
+                 LIMIT ?",
             )?;
 
             let mut results: Vec<(i64, f32)> = stmt
-                .query_map(rusqlite::params![embedding_json], |row| {
-                    let pkg_id: i64 = row.get(0)?;
-                    let dist: f64 = row.get(1)?;
-                    Ok((pkg_id, dist as f32))
-                })?
+                .query_map(
+                    rusqlite::params![embedding_json, scan_limit as i64],
+                    |row| {
+                        let pkg_id: i64 = row.get(0)?;
+                        let dist: f64 = row.get(1)?;
+                        Ok((pkg_id, dist as f32))
+                    },
+                )?
                 .filter_map(|result| result.ok())
                 .filter(|(pkg_id, _)| candidate_set.contains(pkg_id))
-                .map(|(id, dist)| (id, 1.0 - dist)) // Convert to similarity
+                .map(|(id, dist)| {
+                    let cos_sim = (1.0 - dist * dist / 2.0).clamp(0.0, 1.0);
+                    (id, cos_sim)
+                })
                 .collect();
 
             // Sort by similarity (descending)

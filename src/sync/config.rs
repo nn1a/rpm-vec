@@ -12,7 +12,7 @@ pub struct RepoSyncConfig {
     /// Repository name (used as identifier in database)
     pub name: String,
 
-    /// Base URL of the repository (e.g., https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os)
+    /// Base URL of the repository (e.g., http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Base/reference/repos/standard/packages/)
     pub base_url: String,
 
     /// Sync interval in seconds (default: 3600 = 1 hour)
@@ -22,9 +22,6 @@ pub struct RepoSyncConfig {
     /// Whether this repository is enabled for syncing
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-
-    /// Architecture filter (optional)
-    pub arch: Option<String>,
 }
 
 #[cfg(feature = "sync")]
@@ -59,7 +56,7 @@ impl SyncConfig {
     /// Load sync configuration from TOML file
     pub fn from_file(path: &std::path::Path) -> crate::error::Result<Self> {
         let content =
-            std::fs::read_to_string(path).map_err(|e| crate::error::RpmSearchError::Io(e))?;
+            std::fs::read_to_string(path).map_err(crate::error::RpmSearchError::Io)?;
 
         let config: SyncConfig = toml::from_str(&content).map_err(|e| {
             crate::error::RpmSearchError::Config(format!("Invalid sync config: {}", e))
@@ -74,7 +71,7 @@ impl SyncConfig {
             crate::error::RpmSearchError::Config(format!("Failed to serialize config: {}", e))
         })?;
 
-        std::fs::write(path, content).map_err(|e| crate::error::RpmSearchError::Io(e))?;
+        std::fs::write(path, content).map_err(crate::error::RpmSearchError::Io)?;
 
         Ok(())
     }
@@ -84,19 +81,17 @@ impl SyncConfig {
         Self {
             repositories: vec![
                 RepoSyncConfig {
-                    name: "rocky9-baseos".to_string(),
-                    base_url: "https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os".to_string(),
+                    name: "tizen-unified".to_string(),
+                    base_url: "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Base/reference/repos/standard/packages/".to_string(),
                     interval_seconds: 3600,
                     enabled: true,
-                    arch: Some("x86_64".to_string()),
                 },
                 RepoSyncConfig {
-                    name: "rocky9-appstream".to_string(),
-                    base_url: "https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os"
+                    name: "tizen-base".to_string(),
+                    base_url: "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Base/reference/repos/standard/packages/"
                         .to_string(),
                     interval_seconds: 3600,
                     enabled: true,
-                    arch: Some("x86_64".to_string()),
                 },
             ],
             work_dir: default_work_dir(),

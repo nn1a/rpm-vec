@@ -8,6 +8,7 @@ Cargo.lock
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
 
 # Models (too large for git)
 /models/
@@ -35,3 +36,5 @@ Thumbs.db
 # Internal notes (not for commit)
 .restructure-summary.md
 .agent-quickref.md
+
+.rpm-sync/

@@ -122,13 +122,25 @@ impl PackageStore {
 
     /// Search packages by name
     pub fn search_by_name(&self, name: &str) -> Result<Vec<Package>> {
+        // First try exact match
         let mut stmt = self
             .conn
-            .prepare("SELECT pkg_id FROM packages WHERE name LIKE ?")?;
+            .prepare("SELECT pkg_id FROM packages WHERE name = ?")?;
 
-        let pkg_ids: Vec<i64> = stmt
-            .query_map([format!("%{}%", name)], |row| row.get(0))?
+        let mut pkg_ids: Vec<i64> = stmt
+            .query_map([name], |row| row.get(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        // If no exact match, try partial match (contains the search term)
+        if pkg_ids.is_empty() {
+            let mut stmt = self.conn.prepare(
+                "SELECT pkg_id FROM packages WHERE name LIKE ? ORDER BY name ASC LIMIT 100",
+            )?;
+
+            pkg_ids = stmt
+                .query_map([format!("%{}%", name)], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+        }
 
         let mut packages = Vec::new();
         for pkg_id in pkg_ids {
@@ -138,6 +150,114 @@ impl PackageStore {
         }
 
         Ok(packages)
+    }
+
+    /// Search packages by name with relevance scoring
+    /// Returns (pkg_id, score) pairs ordered by relevance
+    pub fn search_by_name_ranked(&self, query: &str) -> Result<Vec<(i64, f32)>> {
+        let lower_query = query.to_lowercase();
+        let mut results: Vec<(i64, f32)> = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
+        // 1. Exact name match (highest score: 1.0)
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT pkg_id FROM packages WHERE LOWER(name) = LOWER(?)")?;
+            let ids: Vec<i64> = stmt
+                .query_map([&lower_query], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for id in ids {
+                if seen_ids.insert(id) {
+                    results.push((id, 1.0));
+                }
+            }
+        }
+
+        // 2. Prefix match (score: 0.85)
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT pkg_id FROM packages WHERE LOWER(name) LIKE ? LIMIT 50")?;
+            let pattern = format!("{}%", lower_query);
+            let ids: Vec<i64> = stmt
+                .query_map([&pattern], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for id in ids {
+                if seen_ids.insert(id) {
+                    results.push((id, 0.85));
+                }
+            }
+        }
+
+        // 3. Contains match on name (score: 0.7)
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT pkg_id FROM packages WHERE LOWER(name) LIKE ? LIMIT 50")?;
+            let pattern = format!("%{}%", lower_query);
+            let ids: Vec<i64> = stmt
+                .query_map([&pattern], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for id in ids {
+                if seen_ids.insert(id) {
+                    results.push((id, 0.7));
+                }
+            }
+        }
+
+        // 4. Summary keyword match (score: 0.5)
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT pkg_id FROM packages WHERE LOWER(summary) LIKE ? LIMIT 100")?;
+            let pattern = format!("%{}%", lower_query);
+            let ids: Vec<i64> = stmt
+                .query_map([&pattern], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for id in ids {
+                if seen_ids.insert(id) {
+                    results.push((id, 0.5));
+                }
+            }
+        }
+
+        // 5. Description keyword match (score: 0.35)
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT pkg_id FROM packages WHERE LOWER(description) LIKE ? LIMIT 100")?;
+            let pattern = format!("%{}%", lower_query);
+            let ids: Vec<i64> = stmt
+                .query_map([&pattern], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for id in ids {
+                if seen_ids.insert(id) {
+                    results.push((id, 0.35));
+                }
+            }
+        }
+
+        // 6. Provides capability match (score: 0.45)
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT DISTINCT pkg_id FROM provides WHERE LOWER(name) LIKE ? LIMIT 50",
+            )?;
+            let pattern = format!("%{}%", lower_query);
+            let ids: Vec<i64> = stmt
+                .query_map([&pattern], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for id in ids {
+                if seen_ids.insert(id) {
+                    results.push((id, 0.45));
+                }
+            }
+        }
+
+        // Sort by score descending
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok(results)
     }
 
     /// Get all package IDs

@@ -91,26 +91,45 @@ impl EmbeddingModel {
     }
 
     /// Generate embeddings for a batch of texts
-    pub fn embed_batch(&self, token_ids: &[Vec<u32>]) -> Result<Vec<Vec<f32>>> {
+    ///
+    /// `token_ids`: tokenized input IDs for each text
+    /// `attention_masks`: attention masks from the tokenizer (1 = real token, 0 = padding)
+    pub fn embed_batch(
+        &self,
+        token_ids: &[Vec<u32>],
+        attention_masks: &[Vec<u32>],
+    ) -> Result<Vec<Vec<f32>>> {
         let batch_size = token_ids.len();
         if batch_size == 0 {
             return Ok(Vec::new());
         }
 
-        // Find max length
-        let max_len = token_ids.iter().map(|ids| ids.len()).max().unwrap_or(0);
+        // Find max length (from the raw token IDs, ignoring tokenizer padding)
+        // Use attention mask to find actual token count per sequence
+        let actual_lengths: Vec<usize> = attention_masks
+            .iter()
+            .map(|mask| mask.iter().filter(|&&x| x != 0).count())
+            .collect();
+        let max_len = actual_lengths.iter().copied().max().unwrap_or(0);
 
-        // Pad sequences
-        let mut padded_ids = Vec::with_capacity(batch_size);
-        for ids in token_ids {
-            let mut padded = ids.clone();
-            padded.resize(max_len, 0); // 0 is typically the PAD token
-            padded_ids.push(padded);
+        // Pad sequences and build attention mask based on actual token length
+        let mut padded_ids = Vec::with_capacity(batch_size * max_len);
+        let mut attention_mask_data = Vec::with_capacity(batch_size * max_len);
+        for (idx, ids) in token_ids.iter().enumerate() {
+            let actual_len = actual_lengths[idx];
+            for i in 0..max_len {
+                if i < actual_len && i < ids.len() {
+                    padded_ids.push(ids[i]);
+                    attention_mask_data.push(1u32);
+                } else {
+                    padded_ids.push(0u32); // PAD token
+                    attention_mask_data.push(0u32);
+                }
+            }
         }
 
-        // Convert to tensor
-        let ids_flat: Vec<u32> = padded_ids.iter().flatten().copied().collect();
-        let ids_tensor = Tensor::from_vec(ids_flat, (batch_size, max_len), &self.device)
+        // Convert to tensors
+        let ids_tensor = Tensor::from_vec(padded_ids, (batch_size, max_len), &self.device)
             .map_err(|e| RpmSearchError::Embedding(format!("Failed to create tensor: {}", e)))?;
 
         // Create token_type_ids (all zeros for single sequence)
@@ -119,19 +138,77 @@ impl EmbeddingModel {
                 |e| RpmSearchError::Embedding(format!("Failed to create token_type_ids: {}", e)),
             )?;
 
-        // Run model (Candle 0.9 requires token_type_ids and attention_mask)
+        // Create attention mask tensor
+        let attention_mask = Tensor::from_vec(
+            attention_mask_data.clone(),
+            (batch_size, max_len),
+            &self.device,
+        )
+        .map_err(|e| {
+            RpmSearchError::Embedding(format!("Failed to create attention_mask: {}", e))
+        })?;
+
+        // Run model with attention mask
         let embeddings = self
             .model
-            .forward(&ids_tensor, &token_type_ids, None)
+            .forward(&ids_tensor, &token_type_ids, Some(&attention_mask))
             .map_err(|e| RpmSearchError::Embedding(format!("Model forward failed: {}", e)))?;
 
-        // Mean pooling over sequence dimension
-        let pooled = embeddings
-            .mean(1)
-            .map_err(|e| RpmSearchError::Embedding(format!("Pooling failed: {}", e)))?;
+        // Attention-masked mean pooling using matmul (efficient, no broadcast):
+        // mask (batch, seq) -> (batch, 1, seq) @ embeddings (batch, seq, hidden) -> (batch, 1, hidden) -> (batch, hidden)
+        // Then divide by token count per sequence.
+        let mask_f32 = attention_mask
+            .to_dtype(candle_core::DType::F32)
+            .map_err(|e| RpmSearchError::Embedding(format!("Mask dtype failed: {}", e)))?;
+
+        // (batch, seq) -> (batch, 1, seq)
+        let mask_row = mask_f32
+            .unsqueeze(1)
+            .map_err(|e| RpmSearchError::Embedding(format!("Mask unsqueeze failed: {}", e)))?;
+
+        // matmul: (batch, 1, seq) x (batch, seq, hidden) = (batch, 1, hidden)
+        let sum_embeddings = mask_row
+            .matmul(&embeddings)
+            .map_err(|e| RpmSearchError::Embedding(format!("Matmul pooling failed: {}", e)))?
+            .squeeze(1)
+            .map_err(|e| RpmSearchError::Embedding(format!("Squeeze failed: {}", e)))?;
+        // sum_embeddings: (batch, hidden)
+
+        // Token counts: (batch,) -> (batch, 1) for broadcasting division
+        let token_counts = mask_f32
+            .sum(1)
+            .map_err(|e| RpmSearchError::Embedding(format!("Token count failed: {}", e)))?
+            .clamp(1.0f64, f64::MAX)
+            .map_err(|e| RpmSearchError::Embedding(format!("Token count clamp failed: {}", e)))?
+            .unsqueeze(1)
+            .map_err(|e| {
+                RpmSearchError::Embedding(format!("Token count unsqueeze failed: {}", e))
+            })?;
+
+        // Mean pooling: (batch, hidden) / (batch, 1) - broadcasting handles the division
+        let pooled = sum_embeddings
+            .broadcast_div(&token_counts)
+            .map_err(|e| RpmSearchError::Embedding(format!("Mean division failed: {}", e)))?;
+
+        // L2 normalize: norm = sqrt(sum(x^2)), normalized = x / norm
+        let norms = pooled
+            .sqr()
+            .map_err(|e| RpmSearchError::Embedding(format!("Norm sqr failed: {}", e)))?
+            .sum(1)
+            .map_err(|e| RpmSearchError::Embedding(format!("Norm sum failed: {}", e)))?
+            .sqrt()
+            .map_err(|e| RpmSearchError::Embedding(format!("Norm sqrt failed: {}", e)))?
+            .clamp(1e-12f64, f64::MAX)
+            .map_err(|e| RpmSearchError::Embedding(format!("Norm clamp failed: {}", e)))?
+            .unsqueeze(1)
+            .map_err(|e| RpmSearchError::Embedding(format!("Norm unsqueeze failed: {}", e)))?;
+
+        let normalized = pooled
+            .broadcast_div(&norms)
+            .map_err(|e| RpmSearchError::Embedding(format!("Normalization failed: {}", e)))?;
 
         // Convert to Vec<Vec<f32>>
-        let pooled_data = pooled
+        let pooled_data = normalized
             .to_vec2::<f32>()
             .map_err(|e| RpmSearchError::Embedding(format!("Conversion failed: {}", e)))?;
 
@@ -152,7 +229,11 @@ impl EmbeddingModel {
     }
 
     #[allow(dead_code)]
-    pub fn embed_batch(&self, _token_ids: &[Vec<u32>]) -> crate::error::Result<Vec<Vec<f32>>> {
+    pub fn embed_batch(
+        &self,
+        _token_ids: &[Vec<u32>],
+        _attention_masks: &[Vec<u32>],
+    ) -> crate::error::Result<Vec<Vec<f32>>> {
         Err(crate::error::RpmSearchError::Embedding(
             "Embedding feature not enabled".to_string(),
         ))

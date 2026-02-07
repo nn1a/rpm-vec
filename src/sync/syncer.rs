@@ -28,7 +28,7 @@ pub struct RepoSyncer {
 impl RepoSyncer {
     pub fn new(api: RpmSearchApi, state_store: SyncStateStore, work_dir: PathBuf) -> Result<Self> {
         // Create work directory if it doesn't exist
-        fs::create_dir_all(&work_dir).map_err(|e| RpmSearchError::Io(e))?;
+        fs::create_dir_all(&work_dir).map_err(RpmSearchError::Io)?;
 
         Ok(Self {
             api,
@@ -170,7 +170,7 @@ impl RepoSyncer {
     fn download_to_file(&self, url: &str, repo_name: &str) -> Result<PathBuf> {
         let filename = url
             .split('/')
-            .last()
+            .next_back()
             .ok_or_else(|| RpmSearchError::Fetch("Invalid URL".to_string()))?;
 
         let dest_path = self.work_dir.join(format!("{}_{}", repo_name, filename));
@@ -190,9 +190,9 @@ impl RepoSyncer {
             .bytes()
             .map_err(|e| RpmSearchError::Fetch(format!("Failed to read response: {}", e)))?;
 
-        let mut file = fs::File::create(&dest_path).map_err(|e| RpmSearchError::Io(e))?;
+        let mut file = fs::File::create(&dest_path).map_err(RpmSearchError::Io)?;
 
-        file.write_all(&bytes).map_err(|e| RpmSearchError::Io(e))?;
+        file.write_all(&bytes).map_err(RpmSearchError::Io)?;
 
         Ok(dest_path)
     }
@@ -215,22 +215,18 @@ impl RepoSyncer {
                     match e.name().as_ref() {
                         b"data" => {
                             // Check if this is primary data
-                            for attr in e.attributes() {
-                                if let Ok(attr) = attr {
-                                    if attr.key.as_ref() == b"type" && &attr.value[..] == b"primary"
-                                    {
-                                        in_primary = true;
-                                    }
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"type" && &attr.value[..] == b"primary"
+                                {
+                                    in_primary = true;
                                 }
                             }
                         }
                         b"location" if in_primary => {
-                            for attr in e.attributes() {
-                                if let Ok(attr) = attr {
-                                    if attr.key.as_ref() == b"href" {
-                                        location =
-                                            Some(String::from_utf8_lossy(&attr.value).to_string());
-                                    }
+                            for attr in e.attributes().flatten() {
+                                if attr.key.as_ref() == b"href" {
+                                    location =
+                                        Some(String::from_utf8_lossy(&attr.value).to_string());
                                 }
                             }
                         }

@@ -5,7 +5,9 @@ use crate::normalize::Package;
 use crate::repomd::fetch::RepoFetcher;
 use crate::repomd::model::RpmPackage;
 use crate::repomd::parser::PrimaryXmlParser;
-use crate::search::{QueryPlanner, SearchFilters, SearchQuery, SemanticSearch, StructuredSearch};
+use crate::search::{
+    QueryPlanner, SearchFilters, SearchQuery, SearchResult, SemanticSearch, StructuredSearch,
+};
 use crate::storage::{PackageStore, VectorStore};
 use rusqlite::Connection;
 use std::path::Path;
@@ -172,7 +174,8 @@ impl RpmSearchApi {
             println!("✓ Using sqlite-vec for accelerated search (statically linked)");
         }
 
-        vector_store.initialize(self.config.embedding_dim)?;
+        // Reinitialize (drop + recreate) to ensure clean slate for embedding rebuild
+        vector_store.reinitialize(self.config.embedding_dim)?;
 
         let pkg_ids = self.package_store.get_all_pkg_ids()?;
         let total_packages = pkg_ids.len();
@@ -250,6 +253,13 @@ impl RpmSearchApi {
     /// Search packages
     #[instrument(skip(self, query, filters), fields(query = %query, top_k = self.config.top_k))]
     pub fn search(&self, query: &str, filters: SearchFilters) -> Result<Vec<Package>> {
+        let result = self.search_with_scores(query, filters)?;
+        Ok(result.packages)
+    }
+
+    /// Search packages with scores
+    #[instrument(skip(self, query, filters), fields(query = %query, top_k = self.config.top_k))]
+    pub fn search_with_scores(&self, query: &str, filters: SearchFilters) -> Result<SearchResult> {
         debug!("Creating embedder and vector store");
         // Create embedder and vector store
         let embedder = Embedder::new(&self.config.model_path, &self.config.tokenizer_path)?;
@@ -267,12 +277,12 @@ impl RpmSearchApi {
             top_k: Some(self.config.top_k),
         };
 
-        debug!("Executing search");
+        debug!("Executing hybrid search");
         let result = planner.search(search_query)?;
 
         info!(results = result.packages.len(), "Search completed");
 
-        Ok(result.packages)
+        Ok(result)
     }
 
     /// Get package count

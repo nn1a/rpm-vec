@@ -76,11 +76,23 @@ impl Package {
     }
 
     /// Build text for embedding
+    ///
+    /// Package name is repeated twice to increase its weight in the embedding vector,
+    /// ensuring name-based semantic matches rank higher.
     pub fn build_embedding_text(&self) -> String {
         let mut text = String::new();
 
+        // Name appears twice for higher weight in embedding
         text.push_str("Package: ");
         text.push_str(&self.name);
+        text.push('\n');
+
+        text.push_str("Name: ");
+        text.push_str(&self.name);
+        text.push('\n');
+
+        text.push_str("Architecture: ");
+        text.push_str(&self.arch);
         text.push('\n');
 
         text.push_str("Summary: ");
@@ -190,6 +202,8 @@ mod tests {
 
         let text = pkg.build_embedding_text();
         assert!(text.contains("Package: openssl"));
+        assert!(text.contains("Name: openssl"));
+        assert!(text.contains("Architecture: x86_64"));
         assert!(text.contains("Summary: Cryptography library"));
         assert!(text.contains("Provides: libssl.so.3"));
         assert!(text.contains("Requires: glibc"));

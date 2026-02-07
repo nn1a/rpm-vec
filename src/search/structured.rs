@@ -16,6 +16,12 @@ impl<'a> StructuredSearch<'a> {
         self.store.search_by_name(name)
     }
 
+    /// Search packages by name with relevance scoring
+    /// Returns (pkg_id, score) pairs ordered by relevance
+    pub fn search_by_name_ranked(&self, query: &str) -> Result<Vec<(i64, f32)>> {
+        self.store.search_by_name_ranked(query)
+    }
+
     /// Get packages by IDs
     pub fn get_packages(&self, pkg_ids: &[i64]) -> Result<Vec<Package>> {
         let mut packages = Vec::new();
@@ -25,6 +31,11 @@ impl<'a> StructuredSearch<'a> {
             }
         }
         Ok(packages)
+    }
+
+    /// Get a single package by ID
+    pub fn get_package(&self, pkg_id: i64) -> Result<Option<Package>> {
+        self.store.get_package(pkg_id)
     }
 
     /// Filter packages by architecture

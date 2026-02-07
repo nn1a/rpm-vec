@@ -1,0 +1,15 @@
+work_dir = ".rpm-sync"
+
+[[repositories]]
+name = "tizen-base"
+base_url = "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Base/reference/repos/standard/packages/"
+interval_seconds = 3600
+enabled = true
+arch = "armv7l"
+
+[[repositories]]
+name = "tizen-unified"
+base_url = "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/"
+interval_seconds = 3600
+enabled = true
+arch = "armv7l"

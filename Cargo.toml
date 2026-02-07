@@ -17,7 +17,7 @@ candle-core = { version = "0.9", optional = true }
 candle-nn = { version = "0.9", optional = true }
 candle-transformers = { version = "0.9", optional = true }
 tokenizers = { version = "0.22", optional = true }
-hf-hub = { version = "0.4", optional = true }
+hf-hub = { version = "0.4", features = ["rustls-tls"], default-features = false, optional = true }
 
 # GPU acceleration for candle (optional)
 cudarc = { version = "0.12", optional = true }
@@ -29,6 +29,10 @@ zstd = "0.13"
 # 에러 처리
 anyhow = "1.0"
 thiserror = "2.0"
+
+# Unix system calls
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -49,11 +53,11 @@ chrono = { version = "0.4", features = ["serde"], optional = true }
 sqlite-vec = { version = "0.1.6", optional = true }
 
 [features]
-default = ["embedding"]
+default = ["embedding", "sync"]
 embedding = ["candle-core", "candle-nn", "candle-transformers", "tokenizers", "hf-hub", "sqlite-vec"]
 mcp = ["tokio"]
 sync = ["tokio", "reqwest", "toml", "chrono"]
 
 # GPU acceleration (optional - will fallback to CPU if unavailable)
-cuda = ["candle-core/cuda", "cudarc"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "cudarc", "cudarc/cuda-12000"]
 accelerate = ["candle-core/accelerate"]
