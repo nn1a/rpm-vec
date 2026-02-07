@@ -4,14 +4,6 @@
 
 RPM Repository Search는 MCP (Model Context Protocol) 서버로 실행되어 AI 에이전트가 RPM 패키지 검색 시스템에 접근할 수 있도록 합니다.
 
-## 빌드
-
-MCP 기능은 optional feature이므로 명시적으로 활성화해야 합니다:
-
-```bash
-cargo build --release --features mcp
-```
-
 ## Claude Desktop 통합
 
 ### 1. 설정 파일 수정
@@ -38,7 +30,7 @@ Claude Desktop 설정 파일(`~/.config/claude/config.json`)에 MCP 서버 추�
 채팅에서 자연어로 요청:
 
 ```
-"Rocky Linux 9에서 사용 가능한 커널 패키지를 찾아줘"
+"Tizen Unified에서 사용 가능한 커널 패키지를 찾아줘"
 "nginx 패키지의 상세 정보를 알려줘"
 "version 1.2.3-1과 1.2.4-1 중 어느 것이 최신인가?"
 ```
@@ -62,7 +54,7 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
   "arguments": {
     "query": "kernel",
     "arch": "x86_64",
-    "repo": "rocky9",
+    "repo": "tizen-unified",
     "top_k": 5
   }
 }
@@ -133,7 +125,7 @@ RPM 패키지 검색 (이름, 설명, 의미 기반)
 {
   "name": "get_repository_stats",
   "arguments": {
-    "repo": "rocky9"
+    "repo": "tizen-unified"
   }
 }
 ```

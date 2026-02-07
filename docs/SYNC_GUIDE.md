@@ -16,11 +16,7 @@ RPM Repository Vector Search v0.9.0 이상에서는 RPM 저장소의 자동 동�
 ## 빌드
 
 ```bash
-# 기본 빌드
 cargo build --release
-
-# MCP 기능 추가
-cargo build --release --features mcp
 ```
 
 ## 기본 사용법
@@ -49,25 +45,16 @@ work_dir = ".rpm-sync"
 
 # 저장소 목록
 [[repositories]]
-name = "rocky9-baseos"
-base_url = "https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os"
-interval_seconds = 3600    # 1시간마다 체크
+name = "tizen-unified"
+base_url = "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/"
+interval_seconds = 3600
 enabled = true
-arch = "x86_64"
 
 [[repositories]]
-name = "rocky9-appstream"
-base_url = "https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os"
-interval_seconds = 7200    # 2시간마다 체크
+name = "tizen-base"
+base_url = "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Base/reference/repos/standard/packages/"
+interval_seconds = 3600
 enabled = true
-arch = "x86_64"
-
-[[repositories]]
-name = "fedora-updates"
-base_url = "https://mirror.example.com/fedora/updates/39/x86_64"
-interval_seconds = 1800    # 30분마다 체크
-enabled = false            # 비활성화된 저장소
-arch = "x86_64"
 ```
 
 ### 3. 일회성 동기화
@@ -112,8 +99,8 @@ rpm_repo_search sync-status
 ```
 Sync Status:
 Repository                Status          Last Sync                 Checksum       
-rocky9-baseos            Success         2026-02-07 16:25:41       abc123def456   
-rocky9-appstream         Success         2026-02-07 16:26:15       789ghi012jkl   
+tizen-unified            Success         2026-02-07 16:25:41       abc123def456   
+tizen-base               Success         2026-02-07 16:26:15       789ghi012jkl   
 ```
 
 ## 상세 설정
@@ -130,7 +117,6 @@ name = "unique-repo-name"           # 저장소 고유 이름 (필수)
 base_url = "https://..."            # 저장소 기본 URL (필수)
 interval_seconds = 3600             # 동기화 주기 (초) (필수)
 enabled = true                       # 활성화 여부 (선택, 기본값: true)
-arch = "x86_64"                     # 아키텍처 (선택, 기본값: x86_64)
 ```
 
 ### 주요 파라미터
@@ -142,7 +128,6 @@ arch = "x86_64"                     # 아키텍처 (선택, 기본값: x86_64)
   - 7200 = 2시간
   - 86400 = 24시간
 - **enabled**: `false`로 설정하면 동기화를 건너뜁니다.
-- **arch**: 저장소의 아키텍처. 검색 시 필터링에 사용됩니다.
 
 ## 실행 흐름
 
@@ -311,7 +296,7 @@ sudo journalctl -u rpm-sync -f
 주기를 너무 짧게 설정하면 불필요한 네트워크 트래픽 발생. 권장 최소 주기:
 - 빠른 업데이트 저장소 (Fedora updates): 30분
 - 일반 저장소: 1-2시간
-- 안정 저장소 (RHEL, Rocky Linux): 6-24시간
+- 안정 저장소 (Tizen, RHEL, Rocky Linux): 6-24시간
 
 ### 디스크 사용량
 

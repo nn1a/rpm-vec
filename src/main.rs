@@ -2,7 +2,6 @@ mod api;
 mod config;
 mod embedding;
 mod error;
-#[cfg(feature = "mcp")]
 mod mcp;
 mod normalize;
 mod repomd;
@@ -114,7 +113,6 @@ enum Commands {
     },
 
     /// Run MCP (Model Context Protocol) server
-    #[cfg(feature = "mcp")]
     McpServer,
 
     /// Generate example sync configuration file
@@ -216,16 +214,7 @@ fn main() -> Result<()> {
 
     // Initialize logging with environment variable support (RUST_LOG)
     // MCP server mode: logs MUST go to stderr since stdout is the JSON-RPC transport
-    let is_mcp_mode = {
-        #[cfg(feature = "mcp")]
-        {
-            std::env::args().any(|a| a == "mcp-server")
-        }
-        #[cfg(not(feature = "mcp"))]
-        {
-            false
-        }
-    };
+    let is_mcp_mode = std::env::args().any(|a| a == "mcp-server");
 
     if is_mcp_mode {
         // MCP mode: write logs to stderr to avoid polluting the JSON-RPC channel on stdout
@@ -416,7 +405,6 @@ fn main() -> Result<()> {
             }
         }
 
-        #[cfg(feature = "mcp")]
         Commands::McpServer => {
             let _span = tracing::info_span!("mcp_server").entered();
             info!("Starting MCP server");

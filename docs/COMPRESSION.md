@@ -94,7 +94,7 @@ ls /var/cache/dnf/fedora-*/repodata/
 # other.xml.zst
 ```
 
-### Rocky Linux / AlmaLinux
+### Tizen / AlmaLinux
 - Gzip이 주로 사용됨
 - 일부 저장소는 Zstandard 지원
 

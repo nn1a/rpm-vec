@@ -50,7 +50,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [features]
 default = []
-mcp = []
 
 # GPU acceleration (optional - will fallback to CPU if unavailable)
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "cudarc", "cudarc/cuda-12000"]

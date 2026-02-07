@@ -21,13 +21,13 @@ cargo build --release --no-default-features
 RPM 저장소의 `primary.xml`, `primary.xml.gz` 또는 `primary.xml.zst` 파일을 다운로드하여 인덱싱합니다:
 
 ```bash
-# Rocky Linux 9 저장소 예제
-wget https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/repodata/primary.xml.gz
+# Tizen Unified 저장소 예제
+wget https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/repodata/primary.xml.gz
 
 # 인덱싱 (gz, zst 압축 자동 감지)
 ./target/release/rpm_repo_search index \
   --file primary.xml.gz \
-  --repo rocky9-baseos
+  --repo tizen-unified
 ```
 
 ### 2. 통계 확인

@@ -108,8 +108,6 @@ rpm_repo_search sync-status
 # 기본 빌드
 cargo build --release
 
-# MCP 기능 포함
-cargo build --release --features mcp
 ```
 
 ### 문서
@@ -124,7 +122,6 @@ cargo build --release --features mcp
   - AI 에이전트(Claude Desktop 등)가 RPM 검색 시스템에 접근 가능
   - stdio 기반 JSON-RPC 2.0 통신
   - 5개의 도구 제공: search_packages, get_package_info, list_repositories, compare_versions, get_repository_stats
-  - MCP 기능은 `--features mcp`로 활성화
 
 ### 기술적 변경사항
 
@@ -230,7 +227,7 @@ sqlite-vec의 O(N) 전체 스캔 제약을 다음과 같이 완화:
 - 1,000,000 패키지 대상 벡터 검색
 - O(N) = O(1,000,000)
 
-사전 필터링 검색 (arch=x86_64, repo=rocky9):
+사전 필터링 검색 (arch=x86_64, repo=tizen-unified):
 - SQL 필터링: 1M → 200K (arch) → 50K (repo)
 - 벡터 검색: O(50,000)
 - 성능 개선: 약 20배
@@ -246,7 +243,7 @@ sqlite-vec의 O(N) 전체 스캔 제약을 다음과 같이 완화:
 ### Structured Logging
 
 ```
-RUST_LOG=debug rpm_repo_search search --query "kernel" --arch x86_64 --repo rocky9
+RUST_LOG=debug rpm_repo_search search --query "kernel" --arch x86_64 --repo tizen-unified
 ```
 
 출력 예시:
@@ -402,8 +399,8 @@ Performing pre-filtered vector search
 
 ```bash
 # 다중 저장소 인덱싱
-./rpm_repo_search index -f rocky9-baseos.xml.gz -r rocky9-baseos
-./rpm_repo_search index -f rocky9-appstream.xml.gz -r rocky9-appstream
+./rpm_repo_search index -f tizen-unified.xml.gz -r tizen-unified
+./rpm_repo_search index -f tizen-ivi.xml.gz -r tizen-ivi
 ./rpm_repo_search index -f fedora-39.xml.zst -r fedora-39
 
 # 저장소 목록 확인
@@ -412,14 +409,14 @@ Performing pre-filtered vector search
 # Repository                       Packages
 # ──────────────────────────────────────────
 # fedora-39                            15234
-# rocky9-appstream                     8765
-# rocky9-baseos                        2341
+# tizen-ivi                         8765
+# tizen-unified                     2341
 
 # 특정 저장소 통계
-./rpm_repo_search repo-stats rocky9-baseos
+./rpm_repo_search repo-stats tizen-unified
 
 # 저장소 검색 (필터링)
-./rpm_repo_search search "kernel" --repo rocky9-baseos
+./rpm_repo_search search "kernel" --repo tizen-unified
 
 # 저장소 삭제
 ./rpm_repo_search delete-repo fedora-39 --yes
@@ -430,7 +427,7 @@ Performing pre-filtered vector search
 모든 저장소 관리 명령에 structured logging 적용:
 ```
 2026-02-07T06:29:44.877718Z  INFO list_repos: Retrieved repository list repo_count=3
-2026-02-07T06:29:50.931492Z  INFO repo_stats{repo=rocky9}: Retrieved repository statistics count=2341
+2026-02-07T06:29:50.931492Z  INFO repo_stats{repo=tizen-unified}: Retrieved repository statistics count=2341
 2026-02-07T06:30:12.456789Z  INFO delete_repo{repo=fedora-39}: Deleted repository deleted=15234
 ```
 
@@ -448,7 +445,7 @@ Performing pre-filtered vector search
   - `tracing` 및 `tracing-subscriber` 통합
   - 환경 변수 `RUST_LOG`로 로그 레벨 제어
   - Spans와 events를 활용한 구조화된 로깅
-  - Key-value 페어로 구조화된 필드 (예: `count=123`, `repo=rocky9`)
+  - Key-value 페어로 구조화된 필드 (예: `count=123`, `repo=tizen-unified`)
   - 타임스탬프 자동 기록 (ISO 8601 형식)
 
 ### 기술적 변경사항
@@ -494,7 +491,7 @@ RUST_LOG=rpm_repo_search::api=debug ./rpm_repo_search index -f primary.xml.gz -r
 
 ```
 2026-02-07T06:24:23.805545Z  INFO stats: Retrieved statistics count=19176
-2026-02-07T06:24:23.805545Z  INFO index: Indexing repository repo=rocky9 file=primary.xml.gz
+2026-02-07T06:24:23.805545Z  INFO index: Indexing repository repo=tizen-unified file=primary.xml.gz
 2026-02-07T06:24:25.123456Z  INFO index: Successfully indexed packages count=1234
 ```
 
@@ -613,7 +610,7 @@ wget https://download.fedoraproject.org/.../primary.xml.zst
 ./rpm_repo_search index -f primary.xml.zst -r fedora38
 ```
 
-#### Rocky Linux 저장소 (Gzip)
+#### Tizen Unified 저장소 (Gzip)
 ```bash
 wget https://download.rockylinux.org/.../primary.xml.gz
 ./rpm_repo_search index -f primary.xml.gz -r rocky9

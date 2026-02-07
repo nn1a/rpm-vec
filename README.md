@@ -71,11 +71,11 @@ The compiled binary will be at `target/release/rpm_repo_search`.
 First, download the `primary.xml.gz` (or `primary.xml.zst`) file from an RPM repository:
 
 ```bash
-# Example: Rocky Linux 9
-wget https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/repodata/primary.xml.gz
+# Example: Tizen Unified
+wget https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/repodata/primary.xml.gz
 
 # Index it (supports .gz and .zst compression)
-./rpm_repo_search index --file primary.xml.gz --repo rocky9-baseos
+./rpm_repo_search index --file primary.xml.gz --repo tizen-unified
 ```
 
 ### 2. Build Embeddings
@@ -210,10 +210,10 @@ Index RPM repository metadata from primary.xml file.
 **Examples:**
 ```bash
 # Initial indexing
-./rpm_repo_search index -f primary.xml.gz -r rocky9-baseos
+./rpm_repo_search index -f primary.xml.gz -r tizen-unified
 
 # Incremental update (add new, update changed, remove deleted packages)
-./rpm_repo_search index -f primary-updated.xml.gz -r rocky9-baseos --update
+./rpm_repo_search index -f primary-updated.xml.gz -r tizen-unified --update
 ```
 
 ### `build-embeddings`
@@ -285,18 +285,18 @@ You can index and manage multiple repositories simultaneously:
 
 ```bash
 # Index multiple repositories
-./rpm_repo_search index -f rocky9-baseos.xml.gz -r rocky9-baseos
-./rpm_repo_search index -f rocky9-appstream.xml.gz -r rocky9-appstream
+./rpm_repo_search index -f tizen-unified.xml.gz -r tizen-unified
+./rpm_repo_search index -f tizen-ivi.xml.gz -r tizen-ivi
 ./rpm_repo_search index -f fedora-39.xml.zst -r fedora-39
 
 # List all repositories
 ./rpm_repo_search list-repos
 
 # Repository statistics
-./rpm_repo_search repo-stats rocky9-baseos
+./rpm_repo_search repo-stats tizen-unified
 
 # Search in specific repository
-./rpm_repo_search search "kernel" --repo rocky9-baseos
+./rpm_repo_search search "kernel" --repo tizen-unified
 
 # Delete a repository
 ./rpm_repo_search delete-repo fedora-39 --yes
@@ -308,10 +308,10 @@ Instead of re-indexing an entire repository, you can perform incremental updates
 
 ```bash
 # Initial indexing
-./rpm_repo_search index -f rocky9-baseos.xml.gz -r rocky9-baseos
+./rpm_repo_search index -f tizen-unified.xml.gz -r tizen-unified
 
 # Later, when the repository is updated
-./rpm_repo_search index -f rocky9-baseos-updated.xml.gz -r rocky9-baseos --update
+./rpm_repo_search index -f tizen-unified-updated.xml.gz -r tizen-unified --update
 
 # The update will:
 # - Add new packages that didn't exist before
@@ -365,17 +365,17 @@ vim sync-config.toml
 work_dir = ".rpm-sync"
 
 [[repositories]]
-name = "rocky9-baseos"
-base_url = "https://dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os"
+name = "tizen-unified"
+base_url = "https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages"
 interval_seconds = 3600  # Check every hour
 enabled = true
 arch = "x86_64"
 
 [[repositories]]
-name = "rocky9-appstream"
-base_url = "https://dl.rockylinux.org/pub/rocky/9/AppStream/x86_64/os"
+name = "tizen-ivi"
+base_url = "https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-IVI/reference/repos/standard/packages"
 interval_seconds = 7200  # Check every 2 hours
-enabled = true
+enabled = false
 arch = "x86_64"
 ```
 
@@ -399,12 +399,6 @@ See [docs/SYNC_GUIDE.md](docs/SYNC_GUIDE.md) for complete guide.
 ## MCP Server (AI Agent Integration)
 
 The MCP (Model Context Protocol) server allows AI agents like Claude Desktop to directly query your RPM package database.
-
-### Building with MCP Support
-
-```bash
-cargo build --release --features mcp
-```
 
 ### Claude Desktop Setup
 
@@ -435,7 +429,7 @@ The MCP server provides 5 tools:
 
 In Claude Desktop:
 ```
-You: "Find all kernel packages for x86_64 in Rocky Linux 9"
+You: "Find all kernel packages for x86_64 in Tizen Unified"
 Claude: [calls search_packages with appropriate filters]
 
 You: "Compare version 1.2.3-1 with 1.2.4-1"
@@ -542,13 +536,13 @@ RUST_LOG=debug ./rpm_repo_search search "kernel"
 RUST_LOG=trace ./rpm_repo_search build-embeddings
 
 # Module-specific logging
-RUST_LOG=rpm_repo_search::api=debug ./rpm_repo_search index -f primary.xml.gz -r rocky9
+RUST_LOG=rpm_repo_search::api=debug ./rpm_repo_search index -f primary.xml.gz -r tizen-unified
 ```
 
 **Available log levels**: `error`, `warn`, `info` (default), `debug`, `trace`
 
 **Log features**:
-- Structured fields: `count=123`, `repo=rocky9`
+- Structured fields: `count=123`, `repo=tizen-unified`
 - Spans: Command-level context tracking
 - Timestamps: ISO 8601 format
 - Function-level instrumentation
