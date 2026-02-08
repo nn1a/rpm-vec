@@ -8,6 +8,15 @@ pub struct Schema;
 impl Schema {
     /// Initialize database schema
     pub fn initialize(conn: &Connection) -> Result<()> {
+        // Performance pragmas
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = -64000;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA mmap_size = 268435456;",
+        )?;
+
         // Create packages table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS packages (

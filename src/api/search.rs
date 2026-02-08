@@ -55,13 +55,14 @@ impl RpmSearchApi {
         if update {
             self.update_repository_packages(rpm_packages, repo_name)
         } else {
-            // Convert and store packages
-            let mut count = 0;
-            for rpm_pkg in rpm_packages {
-                let package = Package::from_rpm_package(rpm_pkg, repo_name.to_string());
-                self.package_store.insert_package(&package)?;
-                count += 1;
-            }
+            // Convert all packages first, then batch insert
+            let packages: Vec<Package> = rpm_packages
+                .into_iter()
+                .map(|rpm_pkg| Package::from_rpm_package(rpm_pkg, repo_name.to_string()))
+                .collect();
+
+            let count = packages.len();
+            self.package_store.insert_packages_batch(&packages)?;
 
             debug!(inserted = count, "Stored packages in database");
 
@@ -69,7 +70,7 @@ impl RpmSearchApi {
         }
     }
 
-    /// Update repository with incremental changes
+    /// Update repository with incremental changes (single transaction)
     #[instrument(skip(self, rpm_packages), fields(repo = %repo_name, package_count = rpm_packages.len()))]
     fn update_repository_packages(
         &mut self,
@@ -93,19 +94,18 @@ impl RpmSearchApi {
             "Loaded existing packages"
         );
 
-        let mut new_packages = HashSet::new();
-        let mut added = 0;
-        let mut updated = 0;
+        let mut new_package_set = HashSet::new();
+        let mut inserts: Vec<Package> = Vec::new();
+        let mut updates: Vec<(i64, Package)> = Vec::new();
 
-        // Process new/updated packages
+        // Classify packages: insert vs update vs skip
         for rpm_pkg in rpm_packages {
             let package = Package::from_rpm_package(rpm_pkg.clone(), repo_name.to_string());
             let key = (package.name.clone(), package.arch.clone());
 
-            new_packages.insert(key.clone());
+            new_package_set.insert(key.clone());
 
             if let Some((old_epoch, old_version, old_release)) = existing_map.get(&key) {
-                // Package exists, check if version changed
                 let old_epoch_num: i64 = old_epoch.parse().unwrap_or(0);
                 let new_epoch_num = rpm_pkg.epoch.unwrap_or(0);
 
@@ -113,7 +113,6 @@ impl RpmSearchApi {
                     || old_version != &package.version
                     || old_release != &package.release
                 {
-                    // Version changed, update package
                     if let Some(old_pkg) =
                         self.package_store.find_package(&key.0, &key.1, repo_name)?
                     {
@@ -124,33 +123,32 @@ impl RpmSearchApi {
                             new_version = %package.full_version(),
                             "Updating package"
                         );
-                        self.package_store
-                            .update_package(old_pkg.pkg_id.unwrap(), &package)?;
-                        updated += 1;
+                        updates.push((old_pkg.pkg_id.unwrap(), package));
                     }
                 }
-                // else: same version, skip
             } else {
-                // New package
                 debug!(package = %package.name, arch = %package.arch, "Adding new package");
-                self.package_store.insert_package(&package)?;
-                added += 1;
+                inserts.push(package);
             }
         }
 
-        // Find and remove packages that no longer exist
-        let mut removed = 0;
-        for (key, _) in existing_map.iter() {
-            if !new_packages.contains(key) {
+        // Collect packages to delete
+        let deletes: Vec<(String, String, String)> = existing_map
+            .iter()
+            .filter(|(key, _)| !new_package_set.contains(key))
+            .map(|(key, _)| {
                 debug!(package = %key.0, arch = %key.1, "Removing deleted package");
-                if self
-                    .package_store
-                    .delete_package(&key.0, &key.1, repo_name)?
-                {
-                    removed += 1;
-                }
-            }
-        }
+                (key.0.clone(), key.1.clone(), repo_name.to_string())
+            })
+            .collect();
+
+        let added = inserts.len();
+        let updated = updates.len();
+        let removed = deletes.len();
+
+        // Execute all changes in a single transaction
+        self.package_store
+            .batch_incremental_update(&inserts, &updates, &deletes)?;
 
         info!(
             added,
@@ -277,10 +275,14 @@ impl RpmSearchApi {
             );
             let embeddings = embedder.embed_passages(&texts)?;
 
-            for (pkg_id, embedding) in ids.iter().zip(embeddings.iter()) {
-                vector_store.insert_embedding(*pkg_id, embedding)?;
-                count += 1;
-            }
+            // Batch insert embeddings in a single transaction
+            let batch_items: Vec<(i64, Vec<f32>)> = ids
+                .iter()
+                .zip(embeddings.iter())
+                .map(|(&id, emb)| (id, emb.clone()))
+                .collect();
+            vector_store.insert_embeddings_batch(&batch_items)?;
+            count += batch_items.len();
 
             debug!(batch = batch_idx + 1, total = count, "Stored embeddings");
 

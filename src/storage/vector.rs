@@ -111,8 +111,8 @@ impl VectorStore {
     }
 
     /// Insert or update embedding for a package
+    #[allow(dead_code)]
     pub fn insert_embedding(&self, pkg_id: i64, embedding: &[f32]) -> Result<()> {
-        // Use sqlite-vec format: convert to JSON array
         let embedding_json = serde_json::to_string(embedding).map_err(|e| {
             RpmSearchError::Storage(format!("Failed to serialize embedding: {}", e))
         })?;
@@ -122,6 +122,27 @@ impl VectorStore {
             rusqlite::params![pkg_id, embedding_json],
         )?;
 
+        Ok(())
+    }
+
+    /// Batch insert embeddings in a single transaction
+    pub fn insert_embeddings_batch(&self, items: &[(i64, Vec<f32>)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR REPLACE INTO embeddings (pkg_id, embedding) VALUES (?, ?)",
+            )?;
+
+            for (pkg_id, embedding) in items {
+                let embedding_json = serde_json::to_string(embedding).map_err(|e| {
+                    RpmSearchError::Storage(format!("Failed to serialize embedding: {}", e))
+                })?;
+                stmt.execute(rusqlite::params![pkg_id, embedding_json])?;
+            }
+        }
+
+        tx.commit()?;
         Ok(())
     }
 

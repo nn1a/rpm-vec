@@ -17,10 +17,16 @@ impl PackageStore {
     }
 
     /// Insert a package and return its pkg_id
+    #[allow(dead_code)]
     pub fn insert_package(&mut self, package: &Package) -> Result<i64> {
         let tx = self.conn.transaction()?;
+        let pkg_id = Self::insert_package_in_tx(&tx, package)?;
+        tx.commit()?;
+        Ok(pkg_id)
+    }
 
-        // Insert package
+    /// Insert a single package within an existing transaction
+    fn insert_package_in_tx(tx: &rusqlite::Transaction, package: &Package) -> Result<i64> {
         tx.execute(
             "INSERT INTO packages (name, epoch, version, release, arch, summary, description, repo)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -38,7 +44,6 @@ impl PackageStore {
 
         let pkg_id = tx.last_insert_rowid();
 
-        // Insert requires
         for req in &package.requires {
             tx.execute(
                 "INSERT INTO requires (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
@@ -46,7 +51,6 @@ impl PackageStore {
             )?;
         }
 
-        // Insert provides
         for prov in &package.provides {
             tx.execute(
                 "INSERT INTO provides (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
@@ -54,8 +58,54 @@ impl PackageStore {
             )?;
         }
 
-        tx.commit()?;
         Ok(pkg_id)
+    }
+
+    /// Batch insert packages in a single transaction with prepared statements
+    pub fn insert_packages_batch(&mut self, packages: &[Package]) -> Result<Vec<i64>> {
+        let tx = self.conn.transaction()?;
+        let mut pkg_ids = Vec::with_capacity(packages.len());
+
+        {
+            let mut pkg_stmt = tx.prepare_cached(
+                "INSERT INTO packages (name, epoch, version, release, arch, summary, description, repo)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )?;
+            let mut req_stmt = tx.prepare_cached(
+                "INSERT INTO requires (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
+            )?;
+            let mut prov_stmt = tx.prepare_cached(
+                "INSERT INTO provides (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
+            )?;
+
+            for package in packages {
+                pkg_stmt.execute(params![
+                    package.name,
+                    package.epoch,
+                    package.version,
+                    package.release,
+                    package.arch,
+                    package.summary,
+                    package.description,
+                    package.repo,
+                ])?;
+
+                let pkg_id = tx.last_insert_rowid();
+
+                for req in &package.requires {
+                    req_stmt.execute(params![pkg_id, req.name, req.flags, req.version])?;
+                }
+
+                for prov in &package.provides {
+                    prov_stmt.execute(params![pkg_id, prov.name, prov.flags, prov.version])?;
+                }
+
+                pkg_ids.push(pkg_id);
+            }
+        }
+
+        tx.commit()?;
+        Ok(pkg_ids)
     }
 
     /// Get a package by pkg_id
@@ -350,52 +400,68 @@ impl PackageStore {
     }
 
     /// Update an existing package (delete old, insert new)
+    #[allow(dead_code)]
     pub fn update_package(&mut self, old_pkg_id: i64, new_package: &Package) -> Result<i64> {
         let tx = self.conn.transaction()?;
+        let new_pkg_id = Self::update_package_in_tx(&tx, old_pkg_id, new_package)?;
+        tx.commit()?;
+        Ok(new_pkg_id)
+    }
 
-        // Delete old package data
+    /// Update a package within an existing transaction
+    fn update_package_in_tx(
+        tx: &rusqlite::Transaction,
+        old_pkg_id: i64,
+        new_package: &Package,
+    ) -> Result<i64> {
         tx.execute("DELETE FROM requires WHERE pkg_id = ?", [old_pkg_id])?;
         tx.execute("DELETE FROM provides WHERE pkg_id = ?", [old_pkg_id])?;
-        // Ignore error if embeddings table doesn't exist
         let _ = tx.execute("DELETE FROM embeddings WHERE pkg_id = ?", [old_pkg_id]);
         tx.execute("DELETE FROM packages WHERE pkg_id = ?", [old_pkg_id])?;
 
-        // Insert new package
-        tx.execute(
-            "INSERT INTO packages (name, epoch, version, release, arch, summary, description, repo)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                new_package.name,
-                new_package.epoch,
-                new_package.version,
-                new_package.release,
-                new_package.arch,
-                new_package.summary,
-                new_package.description,
-                new_package.repo,
-            ],
-        )?;
+        let pkg_id = Self::insert_package_in_tx(tx, new_package)?;
+        Ok(pkg_id)
+    }
 
-        let new_pkg_id = tx.last_insert_rowid();
+    /// Batch incremental update: inserts, updates, deletes in a single transaction
+    pub fn batch_incremental_update(
+        &mut self,
+        inserts: &[Package],
+        updates: &[(i64, Package)],
+        deletes: &[(String, String, String)],
+    ) -> Result<(usize, usize, usize)> {
+        let tx = self.conn.transaction()?;
 
-        // Insert requires
-        for req in &new_package.requires {
-            tx.execute(
-                "INSERT INTO requires (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
-                params![new_pkg_id, req.name, req.flags, req.version],
-            )?;
+        // Batch inserts
+        for package in inserts {
+            Self::insert_package_in_tx(&tx, package)?;
         }
 
-        // Insert provides
-        for prov in &new_package.provides {
-            tx.execute(
-                "INSERT INTO provides (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
-                params![new_pkg_id, prov.name, prov.flags, prov.version],
-            )?;
+        // Batch updates
+        for (old_pkg_id, new_package) in updates {
+            Self::update_package_in_tx(&tx, *old_pkg_id, new_package)?;
+        }
+
+        // Batch deletes
+        for (name, arch, repo) in deletes {
+            let pkg_id: Option<i64> = tx
+                .query_row(
+                    "SELECT pkg_id FROM packages WHERE name = ? AND arch = ? AND repo = ?",
+                    params![name, arch, repo],
+                    |row| row.get(0),
+                )
+                .optional()?;
+
+            if let Some(id) = pkg_id {
+                tx.execute("DELETE FROM requires WHERE pkg_id = ?", [id])?;
+                tx.execute("DELETE FROM provides WHERE pkg_id = ?", [id])?;
+                let _ = tx.execute("DELETE FROM embeddings WHERE pkg_id = ?", [id]);
+                tx.execute("DELETE FROM packages WHERE pkg_id = ?", [id])?;
+            }
         }
 
         tx.commit()?;
-        Ok(new_pkg_id)
+        Ok((inserts.len(), updates.len(), deletes.len()))
     }
 
     /// Get all packages in a repository (name, arch, version)
@@ -425,6 +491,7 @@ impl PackageStore {
     }
 
     /// Delete a specific package by name, arch, and repo
+    #[allow(dead_code)]
     pub fn delete_package(&mut self, name: &str, arch: &str, repo: &str) -> Result<bool> {
         if let Some(pkg) = self.find_package(name, arch, repo)? {
             let pkg_id = pkg.pkg_id.unwrap();
