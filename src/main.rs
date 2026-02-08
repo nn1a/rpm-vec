@@ -156,22 +156,32 @@ fn check_and_exec_cuda_version() -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
 
-    // Try to load CUDA runtime library
+    // Probe for CUDA driver library (load then immediately close)
     let cuda_available = unsafe {
-        !libc::dlopen(
-            c"libcuda.so.1".as_ptr(),
-            libc::RTLD_LAZY | libc::RTLD_GLOBAL,
-        )
-        .is_null()
-            || !libc::dlopen(c"libcuda.so".as_ptr(), libc::RTLD_LAZY | libc::RTLD_GLOBAL).is_null()
+        let handle = libc::dlopen(c"libcuda.so.1".as_ptr(), libc::RTLD_LAZY);
+        if !handle.is_null() {
+            libc::dlclose(handle);
+            true
+        } else {
+            let handle = libc::dlopen(c"libcuda.so".as_ptr(), libc::RTLD_LAZY);
+            if !handle.is_null() {
+                libc::dlclose(handle);
+                true
+            } else {
+                false
+            }
+        }
     };
 
     if cuda_available {
-        // Get the path to the current executable
         let exe_path = std::env::current_exe()?;
 
-        // Look for _cuda variant in the same directory
-        let cuda_binary = exe_path.parent().map(|p| p.join("rpm_repo_search_cuda"));
+        // Derive CUDA binary name from current executable (e.g., foo -> foo_cuda)
+        let cuda_binary = exe_path.parent().and_then(|dir| {
+            exe_path
+                .file_name()
+                .map(|name| dir.join(format!("{}_cuda", name.to_string_lossy())))
+        });
 
         if let Some(cuda_bin) = cuda_binary {
             if cuda_bin.exists() {

@@ -4,19 +4,27 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::io::BufRead;
 
+/// Tracks which dependency section we're currently inside
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DepSection {
+    None,
+    Requires,
+    Provides,
+}
+
 pub struct PrimaryXmlParser;
 
 impl PrimaryXmlParser {
     /// Parse primary.xml (or primary.xml.gz) and extract package metadata
     pub fn parse<R: BufRead>(reader: R) -> Result<Vec<RpmPackage>> {
         let mut xml_reader = Reader::from_reader(reader);
-        // trim_text removed in quick-xml 0.39
 
         let mut packages = Vec::new();
         let mut buf = Vec::new();
         let mut current_package: Option<RpmPackage> = None;
         let mut current_text = String::new();
         let mut in_element = String::new();
+        let mut dep_section = DepSection::None;
 
         loop {
             match xml_reader.read_event_into(&mut buf) {
@@ -73,8 +81,13 @@ impl PrimaryXmlParser {
                         "description" => {
                             current_text.clear();
                         }
+                        "rpm:requires" => {
+                            dep_section = DepSection::Requires;
+                        }
+                        "rpm:provides" => {
+                            dep_section = DepSection::Provides;
+                        }
                         "rpm:entry" => {
-                            // Parse dependency entry
                             let mut dep_name = String::new();
                             let mut dep_flags = None;
                             let mut dep_epoch = None;
@@ -104,9 +117,10 @@ impl PrimaryXmlParser {
                                 };
 
                                 if let Some(pkg) = current_package.as_mut() {
-                                    // Determine if this is requires or provides based on parent
-                                    // This is a simplified approach - in real parsing we'd track parent elements
-                                    pkg.requires.push(dep);
+                                    match dep_section {
+                                        DepSection::Provides => pkg.provides.push(dep),
+                                        _ => pkg.requires.push(dep),
+                                    }
                                 }
                             }
                         }
@@ -151,6 +165,9 @@ impl PrimaryXmlParser {
                                 pkg.description = current_text.clone();
                             }
                         }
+                        "rpm:requires" | "rpm:provides" => {
+                            dep_section = DepSection::None;
+                        }
                         _ => {}
                     }
                     current_text.clear();
@@ -194,5 +211,45 @@ mod tests {
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "test-package");
         assert_eq!(packages[0].version, "1.0.0");
+    }
+
+    #[test]
+    fn test_parse_requires_and_provides() {
+        let xml = r#"<?xml version="1.0"?>
+        <metadata xmlns="http://linux.duke.edu/metadata/common"
+                  xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+          <package>
+            <name>openssl</name>
+            <arch>x86_64</arch>
+            <version epoch="1" ver="3.0.0" rel="1.el9"/>
+            <summary>Cryptography toolkit</summary>
+            <description>OpenSSL library</description>
+            <rpm:provides>
+              <rpm:entry name="libssl.so.3()(64bit)"/>
+              <rpm:entry name="openssl" flags="EQ" ver="3.0.0" rel="1.el9" epoch="1"/>
+            </rpm:provides>
+            <rpm:requires>
+              <rpm:entry name="glibc" flags="GE" ver="2.34"/>
+              <rpm:entry name="libcrypto.so.3()(64bit)"/>
+            </rpm:requires>
+          </package>
+        </metadata>"#;
+
+        let packages = PrimaryXmlParser::parse(xml.as_bytes()).unwrap();
+        assert_eq!(packages.len(), 1);
+        let pkg = &packages[0];
+        assert_eq!(pkg.name, "openssl");
+
+        // Provides should be correctly classified
+        assert_eq!(pkg.provides.len(), 2);
+        assert_eq!(pkg.provides[0].name, "libssl.so.3()(64bit)");
+        assert_eq!(pkg.provides[1].name, "openssl");
+        assert_eq!(pkg.provides[1].flags.as_deref(), Some("EQ"));
+
+        // Requires should be correctly classified
+        assert_eq!(pkg.requires.len(), 2);
+        assert_eq!(pkg.requires[0].name, "glibc");
+        assert_eq!(pkg.requires[0].flags.as_deref(), Some("GE"));
+        assert_eq!(pkg.requires[1].name, "libcrypto.so.3()(64bit)");
     }
 }

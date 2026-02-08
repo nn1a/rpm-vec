@@ -2,14 +2,18 @@
 
 ## 빌드
 
-### 기본 빌드 (embedding 포함)
+### 기본 빌드
 ```bash
 cargo build --release
 ```
 
-### Embedding 제외 빌드
+### 하드웨어 가속 빌드
 ```bash
-cargo build --release --no-default-features
+# macOS (Apple Accelerate)
+cargo build --release --features accelerate
+
+# NVIDIA GPU (CUDA)
+cargo build --release --features cuda
 ```
 
 바이너리는 `target/release/rpm_repo_search`에 생성됩니다.

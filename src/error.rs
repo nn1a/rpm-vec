@@ -18,7 +18,6 @@ pub enum RpmSearchError {
     ModelLoad(String),
 
     #[error("Configuration error: {0}")]
-    #[allow(dead_code)]
     Config(String),
 
     #[error("Storage error: {0}")]
@@ -29,11 +28,9 @@ pub enum RpmSearchError {
     InvalidPackage(String),
 
     #[error("Fetch error: {0}")]
-    #[allow(dead_code)]
     Fetch(String),
 
     #[error("Parse error: {0}")]
-    #[allow(dead_code)]
     Parse(String),
 }
 

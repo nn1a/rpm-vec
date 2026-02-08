@@ -72,20 +72,16 @@ pub struct Package { ... }
 - 모듈 간 의존성 최소화
 
 ### 4. Feature Flags
-Optional 기능은 feature flag 사용:
+Embedding, MCP, Sync 기능은 기본 빌드에 포함됩니다.
+하드웨어 가속만 optional feature로 제공:
 ```toml
 [features]
-default = ["embedding"]
-embedding = ["candle-core", "candle-nn", "candle-transformers", "tokenizers", "hf-hub", "sqlite-vec"]
-mcp = ["tokio"]
-sync = ["tokio", "reqwest", "toml", "chrono"]
+default = []
 
 # 하드웨어 가속 (optional)
-accelerate = ["candle-core/accelerate"]  # Apple Accelerate (macOS 권장)
-cuda = ["candle-core/cuda", "cudarc"]    # NVIDIA GPU
+accelerate = ["candle-core/accelerate", ...]  # Apple Accelerate (macOS 권장)
+cuda = ["candle-core/cuda", "cudarc", ...]    # NVIDIA GPU
 ```
-
-Core 기능은 기본 빌드에 포함, 선택적 기능은 feature로 분리
 
 **하드웨어 가속:**
 - macOS: `accelerate` feature 권장 (Apple Accelerate framework)
@@ -142,11 +138,11 @@ rpm-md XML → Parser → RpmPackage → Normalizer → Package → Storage
 
 Vector search는 **후보 축소**용, SQL이 **최종 정확성** 보장
 
-### 4. Feature: Embedding
-기본 기능으로 포함되어 있으며, 필요시 제외 가능:
+### 4. Embedding
+기본 빌드에 포함:
 - Candle 0.9 (ML 프레임워크)
 - all-MiniLM-L6-v2 모델 (384차원)
-- 제외하려면: `cargo build --no-default-features`
+- sqlite-vec 정적 링크 (벡터 검색)
 
 ## 일반적인 작업
 
@@ -175,20 +171,17 @@ cargo test --doc
 
 ### 빌드
 ```bash
-# 개발 빌드 (embedding 포함)
+# 개발 빌드
 cargo build
 
-# 릴리스 빌드 (embedding 포함)
+# 릴리스 빌드
 cargo build --release
 
 # macOS 최적화 빌드 (Accelerate framework - 권장)
 cargo build --release --features accelerate
 
-# 전체 기능 빌드 (Accelerate + MCP)
-cargo build --release --features "accelerate,mcp"
-
-# Embedding 제외
-cargo build --release --no-default-features
+# NVIDIA GPU 가속 빌드
+cargo build --release --features cuda
 ```
 
 ### 코드 품질

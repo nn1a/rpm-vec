@@ -48,21 +48,20 @@ cargo build --release --features accelerate
 # Build with NVIDIA GPU acceleration (Linux with CUDA)
 cargo build --release --features cuda
 
-# Build with all features (Accelerate + MCP - recommended for macOS)
-cargo build --release --features "accelerate,mcp"
+# Build with Accelerate (recommended for macOS)
+cargo build --release --features accelerate
 ```
 
 The compiled binary will be at `target/release/rpm_repo_search`.
 
 **Build Options:**
-- **Default**: Includes embedding support (CPU-only), vector indexing, and automatic repository synchronization with sqlite-vec static linking
+- **Default**: Includes embedding, MCP server, sync, vector indexing with sqlite-vec static linking
 - **`accelerate`**: Enable Apple Accelerate framework optimization (recommended for macOS)
   - Optimized BLAS/LAPACK operations on Apple hardware
   - Significantly faster than plain CPU on macOS
 - **`cuda`**: Enable CUDA GPU acceleration for NVIDIA GPUs
   - Automatically falls back to CPU if GPU unavailable
   - Requires CUDA toolkit installed
-- **`mcp`**: Add Model Context Protocol server support
 
 ## Usage
 
@@ -116,38 +115,6 @@ cd ../..
 ./rpm_repo_search build-embeddings --verbose
 ```
 
-### 3. Optional: SQLite-vec Extension (for Large Datasets)
-
-For repositories with 100K+ packages, you can optionally install the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension for faster vector search.
-
-**Installation:**
-
-```bash
-# Linux/macOS - Download pre-built extension
-wget https://github.com/asg017/sqlite-vec/releases/download/v0.1.0/sqlite-vec-[OS]-[ARCH].so
-mv sqlite-vec-*.so ~/.local/lib/vec0.so
-
-# Or build from source
-git clone https://github.com/asg017/sqlite-vec.git
-cd sqlite-vec
-make
-# Copy vec0.so to a known location
-```
-
-**Configuration:**
-
-Modify your config to point to the extension:
-```rust
-Config {
-    sqlite_vec_path: Some("/path/to/vec0.so".into()),
-    // ... other settings
-}
-```
-
-**Note:** The tool automatically falls back to manual cosine similarity if the extension is not available. For most use cases (<10K packages), the fallback is sufficient.
-
-For bundling options, see [docs/SQLITE_VEC_BUNDLING.md](docs/SQLITE_VEC_BUNDLING.md).
-
 ### 3. Performance Tips
 
 **Hardware Acceleration (Recommended for macOS):**
@@ -156,10 +123,7 @@ If you're on macOS (especially Apple Silicon), rebuild with the `accelerate` fea
 
 ```bash
 # Rebuild with Apple Accelerate framework
-cargo build --release --features "embedding,accelerate"
-
-# Or add to default build
-cargo build --release --features "accelerate"
+cargo build --release --features accelerate
 ```
 
 This uses Apple's optimized BLAS/LAPACK implementation and can speed up embeddings 2-5x on Apple Silicon.
@@ -168,7 +132,7 @@ This uses Apple's optimized BLAS/LAPACK implementation and can speed up embeddin
 
 ```bash
 # Requires CUDA toolkit installed
-cargo build --release --features "embedding,cuda"
+cargo build --release --features cuda
 ```
 
 **Build time comparison (19K packages):**
@@ -334,12 +298,6 @@ INFO: Incremental update completed added=15 updated=42 removed=3 total=57
 
 Automatically keep your local database synchronized with remote RPM repositories.
 
-### Building with Sync Support
-
-```bash
-cargo build --release --features sync
-```
-
 ### Quick Start
 
 ```bash
@@ -369,14 +327,12 @@ name = "tizen-unified"
 base_url = "https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages"
 interval_seconds = 3600  # Check every hour
 enabled = true
-arch = "x86_64"
 
 [[repositories]]
 name = "tizen-ivi"
 base_url = "https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-IVI/reference/repos/standard/packages"
 interval_seconds = 7200  # Check every 2 hours
 enabled = false
-arch = "x86_64"
 ```
 
 ### How It Works
@@ -450,7 +406,9 @@ rpm-vec/
 │   ├── storage/      # SQLite storage
 │   ├── embedding/    # Vector embeddings
 │   ├── search/       # Search engine
-│   └── api/          # Public API
+│   ├── api/          # Public API
+│   ├── sync/         # Repository auto-sync
+│   └── mcp/          # MCP server
 ├── tests/            # Integration tests
 ├── docs/             # Documentation
 │   ├── design/       # Design documents
@@ -486,11 +444,11 @@ CREATE TABLE requires (...);
 CREATE TABLE provides (...);
 ```
 
-### Vector Embeddings
+### Vector Embeddings (sqlite-vec virtual table)
 ```sql
-CREATE TABLE pkg_embedding (
-    pkg_id    INTEGER PRIMARY KEY,
-    embedding BLOB NOT NULL
+CREATE VIRTUAL TABLE embeddings USING vec0(
+    pkg_id INTEGER PRIMARY KEY,
+    embedding FLOAT[384]
 );
 ```
 

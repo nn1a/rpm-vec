@@ -11,8 +11,10 @@ pub struct EmbeddingModel {
 
 impl EmbeddingModel {
     /// Select the best available device (GPU -> CPU fallback)
+    ///
+    /// For multi-GPU systems, use `CUDA_VISIBLE_DEVICES` env var to select the GPU
+    /// (e.g., `CUDA_VISIBLE_DEVICES=1` to use the second GPU).
     fn select_device() -> Device {
-        // Try CUDA (NVIDIA) first if available
         #[cfg(feature = "cuda")]
         {
             match Device::new_cuda(0) {

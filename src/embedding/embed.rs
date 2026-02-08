@@ -5,7 +5,6 @@ use std::path::Path;
 use tokenizers::Tokenizer;
 
 pub struct Embedder {
-    #[allow(dead_code)]
     model: EmbeddingModel,
     tokenizer: Tokenizer,
 }

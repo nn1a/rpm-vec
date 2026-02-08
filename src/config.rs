@@ -20,9 +20,6 @@ pub struct Config {
 
     /// Top-N results for vector search
     pub top_k: usize,
-
-    /// SQLite-vec extension path (optional, for accelerated vector search)
-    pub sqlite_vec_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -34,7 +31,6 @@ impl Default for Config {
             embedding_dim: 384,
             batch_size: 32,
             top_k: 50,
-            sqlite_vec_path: None,
         }
     }
 }

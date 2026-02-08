@@ -191,7 +191,6 @@ impl RepoSyncer {
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
-        // trim_text removed in quick-xml 0.39
 
         let mut in_primary = false;
         let mut location = None;

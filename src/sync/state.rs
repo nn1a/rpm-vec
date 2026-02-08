@@ -135,7 +135,6 @@ impl SyncStateStore {
     }
 
     /// Delete sync state for a repository
-    /// Delete sync state for a repository (not currently used)
     #[allow(dead_code)]
     pub fn delete_state(&self, repo_name: &str) -> Result<()> {
         self.conn.execute(
