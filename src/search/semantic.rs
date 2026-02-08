@@ -18,8 +18,8 @@ impl SemanticSearch {
 
     /// Search for similar packages using vector similarity
     pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<(i64, f32)>> {
-        // Embed the query
-        let query_embedding = self.embedder.embed(query)?;
+        // Embed the query (auto-adds prefix for E5 models)
+        let query_embedding = self.embedder.embed_query(query)?;
 
         // Search similar vectors
         let results = self.vector_store.search_similar(&query_embedding, top_k)?;
@@ -39,8 +39,8 @@ impl SemanticSearch {
             "Performing pre-filtered vector search"
         );
 
-        // Embed the query
-        let query_embedding = self.embedder.embed(query)?;
+        // Embed the query (auto-adds prefix for E5 models)
+        let query_embedding = self.embedder.embed_query(query)?;
 
         // Search only within candidate IDs
         self.vector_store

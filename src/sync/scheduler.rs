@@ -135,6 +135,7 @@ impl SyncScheduler {
                 let embedder = crate::embedding::Embedder::new(
                     &db_config.model_path,
                     &db_config.tokenizer_path,
+                    db_config.model_type.clone(),
                 )?;
                 let count = api.build_embeddings(&embedder, false, false)?;
                 info!(

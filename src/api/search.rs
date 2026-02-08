@@ -167,6 +167,9 @@ impl RpmSearchApi {
     ///
     /// - `rebuild = false` (default): incremental — only builds for packages missing embeddings
     /// - `rebuild = true`: full rebuild — drops all embeddings and regenerates from scratch
+    ///
+    /// Model mismatch protection: if the DB was built with a different model type,
+    /// incremental builds are rejected (must use `--rebuild`).
     #[instrument(skip(self, embedder), fields(verbose, rebuild))]
     pub fn build_embeddings(
         &self,
@@ -178,6 +181,22 @@ impl RpmSearchApi {
 
         let conn = Connection::open(&self.config.db_path)?;
         let vector_store = VectorStore::new(conn)?;
+
+        // Check model mismatch (only for incremental builds)
+        let requested_type = embedder.model_type();
+        if !rebuild {
+            if let Some(db_type_str) = vector_store.get_embedding_model_type()? {
+                if db_type_str != requested_type.as_db_str() {
+                    return Err(crate::error::RpmSearchError::Embedding(format!(
+                        "Model mismatch: existing embeddings were built with '{}', \
+                         but '{}' was requested.\n\
+                         Use --rebuild to drop existing embeddings and regenerate with the new model.",
+                        db_type_str,
+                        requested_type.as_db_str()
+                    )));
+                }
+            }
+        }
 
         let (pkg_ids, label) = if rebuild {
             // Full rebuild: drop + recreate
@@ -256,7 +275,7 @@ impl RpmSearchApi {
                 packages = texts.len(),
                 "Generating embeddings for batch"
             );
-            let embeddings = embedder.embed_batch(&texts)?;
+            let embeddings = embedder.embed_passages(&texts)?;
 
             for (pkg_id, embedding) in ids.iter().zip(embeddings.iter()) {
                 vector_store.insert_embedding(*pkg_id, embedding)?;
@@ -293,6 +312,10 @@ impl RpmSearchApi {
 
         info!(total_embeddings = count, "Completed embedding generation");
 
+        // Record model info in DB metadata
+        vector_store.set_embedding_model_info(requested_type)?;
+        info!(model = %requested_type, "Saved embedding model info to DB");
+
         Ok(count)
     }
 
@@ -304,13 +327,29 @@ impl RpmSearchApi {
     }
 
     /// Search packages with scores
+    ///
+    /// Auto-detects the embedding model type from DB metadata if available,
+    /// falling back to the config default.
     #[instrument(skip(self, query, filters), fields(query = %query, top_k = self.config.top_k))]
     pub fn search_with_scores(&self, query: &str, filters: SearchFilters) -> Result<SearchResult> {
         debug!("Creating embedder and vector store");
-        // Create embedder and vector store
-        let embedder = Embedder::new(&self.config.model_path, &self.config.tokenizer_path)?;
+
         let conn = Connection::open(&self.config.db_path)?;
         let vector_store = VectorStore::new(conn)?;
+
+        // Auto-detect model type from DB metadata
+        let model_type = if let Some(db_type_str) = vector_store.get_embedding_model_type()? {
+            crate::config::ModelType::from_db_str(&db_type_str)
+                .unwrap_or_else(|| self.config.model_type.clone())
+        } else {
+            self.config.model_type.clone()
+        };
+
+        let model_path = model_type.default_model_path();
+        let tokenizer_path = model_type.default_tokenizer_path();
+
+        // Create embedder with the detected model type
+        let embedder = Embedder::new(&model_path, &tokenizer_path, model_type)?;
 
         debug!("Initializing search components");
         let semantic_search = SemanticSearch::new(vector_store, embedder);

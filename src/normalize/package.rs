@@ -75,10 +75,21 @@ impl Package {
         RpmVersion::new(self.epoch, self.version.clone(), self.release.clone())
     }
 
+    /// Maximum description length in chars for embedding text.
+    /// Keeps total token count well within the 512-token context window.
+    const MAX_DESCRIPTION_CHARS: usize = 400;
+
+    /// Maximum number of provides/requires entries in embedding text.
+    const MAX_DEPS_COUNT: usize = 20;
+
     /// Build text for embedding
     ///
     /// Package name is repeated twice to increase its weight in the embedding vector,
     /// ensuring name-based semantic matches rank higher.
+    ///
+    /// Description is truncated to [`MAX_DESCRIPTION_CHARS`] and provides/requires are
+    /// limited to [`MAX_DEPS_COUNT`] entries to stay within the 512-token context window
+    /// (important for both MiniLM and E5 models).
     pub fn build_embedding_text(&self) -> String {
         let mut text = String::new();
 
@@ -100,19 +111,41 @@ impl Package {
         text.push('\n');
 
         text.push_str("Description:\n");
-        text.push_str(&self.description);
+        if self.description.len() > Self::MAX_DESCRIPTION_CHARS {
+            // Truncate at char boundary
+            let truncated = &self.description[..self
+                .description
+                .char_indices()
+                .take_while(|(i, _)| *i < Self::MAX_DESCRIPTION_CHARS)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0)];
+            text.push_str(truncated);
+        } else {
+            text.push_str(&self.description);
+        }
         text.push('\n');
 
         if !self.provides.is_empty() {
             text.push_str("Provides: ");
-            let provides_str: Vec<String> = self.provides.iter().map(|p| p.name.clone()).collect();
+            let provides_str: Vec<String> = self
+                .provides
+                .iter()
+                .take(Self::MAX_DEPS_COUNT)
+                .map(|p| p.name.clone())
+                .collect();
             text.push_str(&provides_str.join(", "));
             text.push('\n');
         }
 
         if !self.requires.is_empty() {
             text.push_str("Requires: ");
-            let requires_str: Vec<String> = self.requires.iter().map(|r| r.name.clone()).collect();
+            let requires_str: Vec<String> = self
+                .requires
+                .iter()
+                .take(Self::MAX_DEPS_COUNT)
+                .map(|r| r.name.clone())
+                .collect();
             text.push_str(&requires_str.join(", "));
             text.push('\n');
         }

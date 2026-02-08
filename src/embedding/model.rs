@@ -1,3 +1,4 @@
+use crate::config::ModelType;
 use crate::error::{Result, RpmSearchError};
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
@@ -40,8 +41,8 @@ impl EmbeddingModel {
         Device::Cpu
     }
 
-    /// Load the MiniLM model from local files
-    pub fn load<P: AsRef<Path>>(model_path: P) -> Result<Self> {
+    /// Load an embedding model from local files
+    pub fn load<P: AsRef<Path>>(model_path: P, model_type: &ModelType) -> Result<Self> {
         let device = Self::select_device();
 
         // Load model config
@@ -49,12 +50,14 @@ impl EmbeddingModel {
         let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
             RpmSearchError::ModelLoad(format!(
                 "Failed to read config from {}: {}\n\n\
-                Please download the all-MiniLM-L6-v2 model:\n\
-                1. Visit: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2\n\
+                Please download the {} model:\n\
+                1. Visit: {}\n\
                 2. Download: config.json, model.safetensors, tokenizer.json\n\
                 3. Place in: {}",
                 config_path.display(),
                 e,
+                model_type.display_name(),
+                model_type.huggingface_url(),
                 model_path.as_ref().display()
             ))
         })?;
@@ -66,11 +69,13 @@ impl EmbeddingModel {
         if !weights_path.exists() {
             return Err(RpmSearchError::ModelLoad(format!(
                 "Model weights not found: {}\n\n\
-                Please download the all-MiniLM-L6-v2 model:\n\
-                1. Visit: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2\n\
+                Please download the {} model:\n\
+                1. Visit: {}\n\
                 2. Download: config.json, model.safetensors, tokenizer.json\n\
                 3. Place in: {}",
                 weights_path.display(),
+                model_type.display_name(),
+                model_type.huggingface_url(),
                 model_path.as_ref().display()
             )));
         }

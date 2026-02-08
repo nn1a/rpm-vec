@@ -10,7 +10,7 @@ mod storage;
 mod sync;
 
 use clap::{Parser, Subcommand};
-use config::Config;
+use config::{Config, ModelType};
 use error::Result;
 use search::SearchFilters;
 use std::path::PathBuf;
@@ -47,13 +47,17 @@ enum Commands {
 
     /// Build embeddings for indexed packages
     BuildEmbeddings {
-        /// Model directory path
-        #[arg(short, long, default_value = "models/all-MiniLM-L6-v2")]
-        model: PathBuf,
+        /// Embedding model type (minilm = English, e5-multilingual = 100 languages)
+        #[arg(long, value_enum, default_value = "minilm")]
+        model_type: ModelType,
 
-        /// Tokenizer file path
-        #[arg(short, long, default_value = "models/all-MiniLM-L6-v2/tokenizer.json")]
-        tokenizer: PathBuf,
+        /// Model directory path (default: auto from model-type)
+        #[arg(short, long)]
+        model: Option<PathBuf>,
+
+        /// Tokenizer file path (default: auto from model-type)
+        #[arg(short, long)]
+        tokenizer: Option<PathBuf>,
 
         /// Show progress information
         #[arg(short, long)]
@@ -268,25 +272,36 @@ fn main() -> Result<()> {
         }
 
         Commands::BuildEmbeddings {
+            model_type,
             model,
             tokenizer,
             verbose,
             rebuild,
         } => {
+            // Resolve model/tokenizer paths from model_type defaults or explicit overrides
+            let model_path = model.unwrap_or_else(|| model_type.default_model_path());
+            let tokenizer_path = tokenizer.unwrap_or_else(|| model_type.default_tokenizer_path());
+
             let _span = tracing::info_span!("build_embeddings",
-                model = %model.display(),
-                tokenizer = %tokenizer.display(),
+                model_type = %model_type,
+                model = %model_path.display(),
+                tokenizer = %tokenizer_path.display(),
                 verbose,
                 rebuild
             )
             .entered();
             info!("Building embeddings");
             let mut config = config;
-            config.model_path = model;
-            config.tokenizer_path = tokenizer;
+            config.model_type = model_type;
+            config.model_path = model_path;
+            config.tokenizer_path = tokenizer_path;
 
             let api = api::RpmSearchApi::new(config.clone())?;
-            let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
+            let embedder = embedding::Embedder::new(
+                &config.model_path,
+                &config.tokenizer_path,
+                config.model_type.clone(),
+            )?;
             let count = api.build_embeddings(&embedder, verbose, rebuild)?;
             info!(count, "Successfully built embeddings");
         }
@@ -472,7 +487,11 @@ fn main() -> Result<()> {
             // Automatically build embeddings incrementally after sync
             println!("\n🔨 Building embeddings for new packages...");
             let api = api::RpmSearchApi::new(config.clone())?;
-            let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
+            let embedder = embedding::Embedder::new(
+                &config.model_path,
+                &config.tokenizer_path,
+                config.model_type.clone(),
+            )?;
             let count = api.build_embeddings(&embedder, false, false)?;
             if count > 0 {
                 println!("✅ Built embeddings for {} new packages", count);
@@ -555,10 +574,29 @@ fn main() -> Result<()> {
             let mut config = config;
             config.top_k = 10;
 
-            let embedder = embedding::Embedder::new(&config.model_path, &config.tokenizer_path)?;
+            // Auto-detect model type from DB metadata
+            let db_model_type = {
+                let conn = rusqlite::Connection::open(&config.db_path)?;
+                let vector_store = storage::VectorStore::new(conn)?;
+                vector_store.get_embedding_model_type()?
+            };
+            if let Some(ref db_type_str) = db_model_type {
+                if let Some(detected) = ModelType::from_db_str(db_type_str) {
+                    info!(model = %detected, "Auto-detected embedding model from DB");
+                    config.model_type = detected.clone();
+                    config.model_path = detected.default_model_path();
+                    config.tokenizer_path = detected.default_tokenizer_path();
+                }
+            }
 
-            // Embed the query
-            let query_embedding = embedder.embed(&query)?;
+            let embedder = embedding::Embedder::new(
+                &config.model_path,
+                &config.tokenizer_path,
+                config.model_type.clone(),
+            )?;
+
+            // Embed the query (auto-adds prefix for E5 models)
+            let query_embedding = embedder.embed_query(&query)?;
             let norm: f32 = query_embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
             println!("Query: \"{}\"", query);
             println!("Query embedding norm: {:.6} (should be ~1.0)", norm);
@@ -677,7 +715,7 @@ fn main() -> Result<()> {
                 "doc-like",
                 "gcc-contrib-like",
             ];
-            let ref_embeddings = embedder.embed_batch(&ref_texts)?;
+            let ref_embeddings = embedder.embed_passages(&ref_texts)?;
 
             for (label, emb) in ref_labels.iter().zip(ref_embeddings.iter()) {
                 let n: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();

@@ -1,3 +1,4 @@
+use crate::config::ModelType;
 use crate::error::{Result, RpmSearchError};
 use rusqlite::Connection;
 
@@ -9,6 +10,41 @@ impl VectorStore {
     /// Create a new vector store (using the same connection as PackageStore)
     pub fn new(conn: Connection) -> Result<Self> {
         Ok(Self { conn })
+    }
+
+    /// Record embedding model info in the metadata table
+    pub fn set_embedding_model_info(&self, model_type: &ModelType) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_model_type', ?)",
+            [model_type.as_db_str()],
+        )?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_model_name', ?)",
+            [model_type.display_name()],
+        )?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('embedding_built_at', ?)",
+            [&now],
+        )?;
+        Ok(())
+    }
+
+    /// Get the embedding model type string from DB metadata
+    pub fn get_embedding_model_type(&self) -> Result<Option<String>> {
+        match self.conn.query_row(
+            "SELECT value FROM metadata WHERE key = 'embedding_model_type'",
+            [],
+            |row| row.get(0),
+        ) {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => {
+                // metadata table might not exist yet
+                tracing::debug!("Could not read embedding_model_type: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     /// Reinitialize vector table (drop and recreate) - used when rebuilding embeddings
