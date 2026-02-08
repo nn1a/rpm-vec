@@ -93,12 +93,12 @@ impl RepoSyncer {
 
         let repomd_content = self.download_file(&repomd_url)?;
 
-        // Parse repomd.xml to find primary.xml location
-        let primary_info = self.parse_repomd(&repomd_content)?;
+        // Parse repomd.xml to find primary.xml and filelists.xml locations
+        let repodata_info = self.parse_repomd(&repomd_content)?;
 
         // Check if changed (compare checksum)
         let changed = match &current_state.last_checksum {
-            Some(last) => last != &primary_info.checksum,
+            Some(last) => last != &repodata_info.primary_checksum,
             None => true,
         };
 
@@ -106,7 +106,7 @@ impl RepoSyncer {
             info!(repo = %config.name, "No changes detected, skipping update");
             return Ok(SyncResult {
                 changed: false,
-                checksum: primary_info.checksum,
+                checksum: repodata_info.primary_checksum,
                 packages_synced: 0,
             });
         }
@@ -115,7 +115,7 @@ impl RepoSyncer {
         let primary_url = format!(
             "{}/{}",
             config.base_url.trim_end_matches('/'),
-            primary_info.location.trim_start_matches('/')
+            repodata_info.primary_location.trim_start_matches('/')
         );
         debug!(url = %primary_url, "Downloading primary.xml");
 
@@ -132,9 +132,40 @@ impl RepoSyncer {
             warn!(file = %primary_file.display(), error = %e, "Failed to clean up downloaded file");
         }
 
+        // Download and index filelists.xml (if enabled and available)
+        if config.sync_filelists {
+            if let Some(ref fl_location) = repodata_info.filelists_location {
+                let fl_url = format!(
+                    "{}/{}",
+                    config.base_url.trim_end_matches('/'),
+                    fl_location.trim_start_matches('/')
+                );
+                debug!(url = %fl_url, "Downloading filelists.xml");
+
+                match self.download_to_file(&fl_url, &config.name) {
+                    Ok(fl_file) => {
+                        match self.api.index_filelists(&fl_file, &config.name) {
+                            Ok(count) => {
+                                info!(files_indexed = count, "Filelists indexed successfully");
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "Failed to index filelists (non-fatal)");
+                            }
+                        }
+                        if let Err(e) = fs::remove_file(&fl_file) {
+                            warn!(file = %fl_file.display(), error = %e, "Failed to clean up filelists file");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to download filelists.xml (non-fatal)");
+                    }
+                }
+            }
+        }
+
         Ok(SyncResult {
             changed: true,
-            checksum: primary_info.checksum,
+            checksum: repodata_info.primary_checksum,
             packages_synced,
         })
     }
@@ -186,55 +217,67 @@ impl RepoSyncer {
         Ok(dest_path)
     }
 
-    fn parse_repomd(&self, xml: &str) -> Result<PrimaryFileInfo> {
+    fn parse_repomd(&self, xml: &str) -> Result<RepoDataInfo> {
         use quick_xml::events::Event;
         use quick_xml::Reader;
 
         let mut reader = Reader::from_str(xml);
 
-        let mut in_primary = false;
-        let mut location = None;
-        let mut checksum = None;
+        #[derive(PartialEq)]
+        enum Section {
+            None,
+            Primary,
+            Filelists,
+        }
+
+        let mut section = Section::None;
+        let mut primary_location = None;
+        let mut primary_checksum = None;
+        let mut filelists_location = None;
 
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                    match e.name().as_ref() {
-                        b"data" => {
-                            // Check if this is primary data
-                            for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"type" && &attr.value[..] == b"primary" {
-                                    in_primary = true;
+                Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => match e.name().as_ref() {
+                    b"data" => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"type" {
+                                match &attr.value[..] {
+                                    b"primary" => section = Section::Primary,
+                                    b"filelists" => section = Section::Filelists,
+                                    _ => {}
                                 }
                             }
                         }
-                        b"location" if in_primary => {
-                            for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"href" {
-                                    location =
-                                        Some(String::from_utf8_lossy(&attr.value).to_string());
-                                }
-                            }
-                        }
-                        b"checksum" if in_primary => {
-                            // Read checksum text
-                            if let Ok(Event::Text(e)) = reader.read_event_into(&mut buf) {
-                                checksum = Some(
-                                    reader
-                                        .decoder()
-                                        .decode(e.as_ref())
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                );
-                            }
-                        }
-                        _ => {}
                     }
-                }
+                    b"location" if section != Section::None => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"href" {
+                                let href = String::from_utf8_lossy(&attr.value).to_string();
+                                match section {
+                                    Section::Primary => primary_location = Some(href),
+                                    Section::Filelists => filelists_location = Some(href),
+                                    Section::None => {}
+                                }
+                            }
+                        }
+                    }
+                    b"checksum" if section == Section::Primary => {
+                        if let Ok(Event::Text(e)) = reader.read_event_into(&mut buf) {
+                            primary_checksum = Some(
+                                reader
+                                    .decoder()
+                                    .decode(e.as_ref())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    _ => {}
+                },
                 Ok(Event::End(ref e)) => {
                     if e.name().as_ref() == b"data" {
-                        in_primary = false;
+                        section = Section::None;
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -244,10 +287,11 @@ impl RepoSyncer {
             buf.clear();
         }
 
-        match (location, checksum) {
-            (Some(loc), Some(sum)) => Ok(PrimaryFileInfo {
-                location: loc,
-                checksum: sum,
+        match (primary_location, primary_checksum) {
+            (Some(loc), Some(sum)) => Ok(RepoDataInfo {
+                primary_location: loc,
+                primary_checksum: sum,
+                filelists_location,
             }),
             _ => Err(RpmSearchError::Parse(
                 "Could not find primary.xml location or checksum in repomd.xml".to_string(),
@@ -257,9 +301,10 @@ impl RepoSyncer {
 }
 
 #[derive(Debug)]
-struct PrimaryFileInfo {
-    location: String,
-    checksum: String,
+struct RepoDataInfo {
+    primary_location: String,
+    primary_checksum: String,
+    filelists_location: Option<String>,
 }
 
 #[derive(Debug)]

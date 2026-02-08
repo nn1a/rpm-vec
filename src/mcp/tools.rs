@@ -62,5 +62,46 @@ pub fn get_tools() -> Vec<Tool> {
                 "properties": {}
             }),
         },
+        Tool {
+            name: "rpm_file_search".to_string(),
+            description: "Search for RPM packages that provide a specific file path".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path to search for (e.g., /usr/bin/python3 or just 'python3')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return",
+                        "default": 20
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
+            name: "rpm_package_files".to_string(),
+            description: "List all files provided by a specific RPM package".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Package name"
+                    },
+                    "arch": {
+                        "type": "string",
+                        "description": "Architecture (optional)"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository name (optional)"
+                    }
+                },
+                "required": ["name"]
+            }),
+        },
     ]
 }

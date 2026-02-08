@@ -154,6 +154,8 @@ impl McpServer {
             "rpm_search" => self.search_packages(&tool_params.arguments)?,
             "rpm_package_info" => self.get_package_info(&tool_params.arguments)?,
             "rpm_repositories" => self.list_repositories()?,
+            "rpm_file_search" => self.search_by_file(&tool_params.arguments)?,
+            "rpm_package_files" => self.list_package_files(&tool_params.arguments)?,
             _ => {
                 return Ok(serde_json::to_value(ToolResult::error(format!(
                     "Unknown tool: {}",
@@ -301,5 +303,81 @@ impl McpServer {
         }
 
         Ok(result)
+    }
+
+    fn search_by_file(&self, args: &Value) -> Result<String> {
+        let path = args["path"]
+            .as_str()
+            .ok_or_else(|| RpmSearchError::Config("Missing 'path' parameter".to_string()))?;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+
+        info!(path = %path, "Searching packages by file");
+
+        let results = self.api.search_file(path)?;
+
+        if results.is_empty() {
+            return Ok(format!("No packages found providing '{}'.", path));
+        }
+
+        let mut text = format!(
+            "Packages providing '{}' ({} found):\n\n",
+            path,
+            results.len()
+        );
+        for (i, (pkg, full_path, file_type)) in results.iter().enumerate().take(limit) {
+            text.push_str(&format!(
+                "{}. {}-{}.{} ({}) [{}] {}\n",
+                i + 1,
+                pkg.name,
+                pkg.full_version(),
+                pkg.arch,
+                pkg.repo,
+                file_type,
+                full_path,
+            ));
+        }
+
+        Ok(text)
+    }
+
+    fn list_package_files(&self, args: &Value) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| RpmSearchError::Config("Missing 'name' parameter".to_string()))?;
+        let arch = args.get("arch").and_then(|v| v.as_str());
+        let repo = args.get("repo").and_then(|v| v.as_str());
+
+        info!(name = %name, "Listing package files");
+
+        let results = self.api.list_package_files(name, arch, repo)?;
+
+        if results.is_empty() {
+            return Ok(format!(
+                "Package '{}' not found or no filelists indexed.",
+                name
+            ));
+        }
+
+        let mut text = String::new();
+        for (pkg, files) in &results {
+            text.push_str(&format!(
+                "Files in {}-{}.{} ({}):\n",
+                pkg.name,
+                pkg.full_version(),
+                pkg.arch,
+                pkg.repo
+            ));
+            if files.is_empty() {
+                text.push_str("  (no filelists indexed)\n");
+            } else {
+                for (path, ft) in files {
+                    text.push_str(&format!("  [{}] {}\n", ft, path));
+                }
+                text.push_str(&format!("Total: {} file(s)\n", files.len()));
+            }
+            text.push('\n');
+        }
+
+        Ok(text)
     }
 }

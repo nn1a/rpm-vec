@@ -43,6 +43,46 @@ enum Commands {
         /// Update existing repository (incremental update)
         #[arg(short, long)]
         update: bool,
+
+        /// Path to filelists.xml (optional, will index file lists after primary.xml)
+        #[arg(long)]
+        filelists: Option<PathBuf>,
+    },
+
+    /// Index filelists from filelists.xml file (run after 'index')
+    IndexFilelists {
+        /// Path to filelists.xml, filelists.xml.gz, or filelists.xml.zst
+        #[arg(short, long)]
+        file: PathBuf,
+
+        /// Repository name (must match the repo used in 'index')
+        #[arg(short, long)]
+        repo: String,
+    },
+
+    /// Search for packages that provide a specific file
+    SearchFile {
+        /// File path to search (e.g., /usr/bin/python3 or just "python3")
+        path: String,
+
+        /// Number of results to return
+        #[arg(short = 'n', long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// List files provided by a package
+    ListFiles {
+        /// Package name
+        #[arg(short, long)]
+        package: String,
+
+        /// Filter by architecture
+        #[arg(short, long)]
+        arch: Option<String>,
+
+        /// Filter by repository
+        #[arg(short, long)]
+        repo: Option<String>,
     },
 
     /// Build embeddings for indexed packages
@@ -254,7 +294,12 @@ fn main() -> Result<()> {
     let config = Config::new(cli.db);
 
     match cli.command {
-        Commands::Index { file, repo, update } => {
+        Commands::Index {
+            file,
+            repo,
+            update,
+            filelists,
+        } => {
             let _span = tracing::info_span!("index", repo = %repo, file = %file.display(), update)
                 .entered();
             if update {
@@ -268,6 +313,13 @@ fn main() -> Result<()> {
                 info!(count, "Successfully updated packages");
             } else {
                 info!(count, "Successfully indexed packages");
+            }
+
+            // If filelists provided, index them too
+            if let Some(filelists_path) = filelists {
+                info!("Indexing filelists");
+                let fl_count = api.index_filelists(&filelists_path, &repo)?;
+                info!(fl_count, "Successfully indexed file entries");
             }
         }
 
@@ -364,13 +416,93 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::IndexFilelists { file, repo } => {
+            let _span =
+                tracing::info_span!("index_filelists", repo = %repo, file = %file.display())
+                    .entered();
+            info!("Indexing filelists");
+            let mut api = api::RpmSearchApi::new(config)?;
+            let count = api.index_filelists(&file, &repo)?;
+            info!(count, "Successfully indexed file entries");
+        }
+
+        Commands::SearchFile { path, limit } => {
+            let _span = tracing::info_span!("search_file", path = %path).entered();
+            let api = api::RpmSearchApi::new(config)?;
+            let results = api.search_file(&path)?;
+
+            if results.is_empty() {
+                println!("No packages found providing '{}'", path);
+            } else {
+                println!("\nPackages providing '{}':\n", path);
+                for (i, (pkg, full_path, file_type)) in results.iter().enumerate().take(limit) {
+                    println!(
+                        "  {}. {}-{}.{} ({}) [{}] — {}",
+                        i + 1,
+                        pkg.name,
+                        pkg.full_version(),
+                        pkg.arch,
+                        pkg.repo,
+                        file_type,
+                        full_path,
+                    );
+                }
+                let total = results.len();
+                if total > limit {
+                    println!("\n  ... and {} more results", total - limit);
+                }
+            }
+        }
+
+        Commands::ListFiles {
+            package,
+            arch,
+            repo,
+        } => {
+            let _span = tracing::info_span!("list_files", package = %package).entered();
+            let api = api::RpmSearchApi::new(config)?;
+            let results = api.list_package_files(&package, arch.as_deref(), repo.as_deref())?;
+
+            if results.is_empty() {
+                println!("No packages found matching '{}'", package);
+                println!("(Make sure filelists have been indexed with 'index-filelists')");
+            } else {
+                for (pkg, files) in &results {
+                    println!(
+                        "\n{}-{}.{} ({})",
+                        pkg.name,
+                        pkg.full_version(),
+                        pkg.arch,
+                        pkg.repo
+                    );
+                    if files.is_empty() {
+                        println!("  (no filelists indexed)");
+                    } else {
+                        for (path, ft) in files {
+                            let marker = match ft.as_str() {
+                                "dir" => "d",
+                                "ghost" => "g",
+                                _ => " ",
+                            };
+                            println!("  [{}] {}", marker, path);
+                        }
+                        println!("  Total: {} file(s)", files.len());
+                    }
+                }
+            }
+        }
+
         Commands::Stats => {
             let _span = tracing::info_span!("stats").entered();
             let api = api::RpmSearchApi::new(config)?;
             let count = api.package_count()?;
+            let file_count = api.file_count()?;
+            let dir_count = api.directory_count()?;
             info!(count, "Retrieved statistics");
             println!("Database Statistics:");
-            println!("  Total packages: {}", count);
+            println!("  Total packages:    {}", count);
+            println!("  Total files:       {}", file_count);
+            println!("  Total directories: {}", dir_count);
         }
 
         Commands::ListRepos => {

@@ -1,7 +1,7 @@
 use crate::error::Result;
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 pub struct Schema;
 
@@ -91,19 +91,39 @@ impl Schema {
             [],
         )?;
 
-        // Create files table (optional, can be disabled for large repos)
+        // Create directories table (path deduplication for file entries)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS directories (
+                dir_id  INTEGER PRIMARY KEY,
+                path    TEXT NOT NULL UNIQUE
+            )",
+            [],
+        )?;
+
+        // Create files table (normalized: directory + filename)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS files (
-                id      INTEGER PRIMARY KEY,
-                pkg_id  INTEGER NOT NULL,
-                path    TEXT NOT NULL,
-                FOREIGN KEY(pkg_id) REFERENCES packages(pkg_id)
+                id        INTEGER PRIMARY KEY,
+                pkg_id    INTEGER NOT NULL,
+                dir_id    INTEGER NOT NULL,
+                name      TEXT NOT NULL DEFAULT '',
+                file_type INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY(pkg_id) REFERENCES packages(pkg_id),
+                FOREIGN KEY(dir_id) REFERENCES directories(dir_id)
             )",
             [],
         )?;
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_files_pkg_id ON files(pkg_id)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_dir_name ON files(dir_id, name)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_name ON files(name)",
             [],
         )?;
 
@@ -125,8 +145,23 @@ impl Schema {
         Ok(())
     }
 
+    /// Migrate database schema from old version to current.
+    /// Should be called before initialize() for existing databases.
+    pub fn migrate(conn: &Connection) -> Result<()> {
+        let current = Self::get_version(conn).unwrap_or(0);
+        if current > 0 && current < SCHEMA_VERSION {
+            // v1 -> v2: Replace flat files table with normalized directories + files
+            if current < 2 {
+                conn.execute_batch(
+                    "DROP TABLE IF EXISTS files;
+                     DROP INDEX IF EXISTS idx_files_pkg_id;",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Get current schema version
-    #[allow(dead_code)]
     pub fn get_version(conn: &Connection) -> Result<i32> {
         let version: i32 = conn
             .query_row(

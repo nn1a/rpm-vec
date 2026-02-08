@@ -46,6 +46,53 @@ impl RpmDependency {
     }
 }
 
+/// File type from filelists.xml
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RpmFileType {
+    File,
+    Dir,
+    Ghost,
+}
+
+impl RpmFileType {
+    /// Convert to integer for storage (0=file, 1=dir, 2=ghost)
+    pub fn as_i32(&self) -> i32 {
+        match self {
+            RpmFileType::File => 0,
+            RpmFileType::Dir => 1,
+            RpmFileType::Ghost => 2,
+        }
+    }
+
+    /// Convert from integer
+    #[allow(dead_code)]
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            1 => RpmFileType::Dir,
+            2 => RpmFileType::Ghost,
+            _ => RpmFileType::File,
+        }
+    }
+}
+
+/// File entry with type information from filelists.xml
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpmFileEntry {
+    pub path: String,
+    pub file_type: RpmFileType,
+}
+
+/// Package file list from filelists.xml (matched to existing packages by NEVRA)
+#[derive(Debug, Clone)]
+pub struct FilelistsPackage {
+    pub name: String,
+    pub arch: String,
+    pub epoch: Option<i64>,
+    pub version: String,
+    pub release: String,
+    pub files: Vec<RpmFileEntry>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RepoMetadata {

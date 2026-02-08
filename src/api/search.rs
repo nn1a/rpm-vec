@@ -3,6 +3,7 @@ use crate::embedding::Embedder;
 use crate::error::Result;
 use crate::normalize::Package;
 use crate::repomd::fetch::RepoFetcher;
+use crate::repomd::filelists_parser::FilelistsXmlParser;
 use crate::repomd::model::RpmPackage;
 use crate::repomd::parser::PrimaryXmlParser;
 use crate::search::{
@@ -396,5 +397,166 @@ impl RpmSearchApi {
     #[allow(dead_code)]
     pub fn search_by_name(&self, name: &str) -> Result<Vec<Package>> {
         self.package_store.search_by_name(name)
+    }
+
+    // ── Filelists methods ───────────────────────────────────────────────
+
+    /// Index filelists from filelists.xml file for an existing repository.
+    /// Packages must already be indexed from primary.xml.
+    #[instrument(skip(self, filelists_path), fields(path = %filelists_path.as_ref().display(), repo = %repo_name))]
+    pub fn index_filelists<P: AsRef<Path>>(
+        &mut self,
+        filelists_path: P,
+        repo_name: &str,
+    ) -> Result<usize> {
+        debug!("Fetching filelists file");
+        let data = RepoFetcher::fetch_local(&filelists_path)?;
+
+        debug!("Decompressing filelists data");
+        let xml_data = RepoFetcher::auto_decompress(&filelists_path, &data)?;
+
+        debug!("Parsing filelists XML");
+        let fl_packages = FilelistsXmlParser::parse(&xml_data[..])?;
+
+        info!(
+            filelists_count = fl_packages.len(),
+            "Parsed filelists packages"
+        );
+
+        // Match filelists packages to existing pkg_ids
+        let mut entries: Vec<(i64, Vec<(String, i32)>)> = Vec::new();
+        let mut matched = 0usize;
+        let mut unmatched = 0usize;
+
+        for fl_pkg in &fl_packages {
+            let pkg_id = self.package_store.find_package_by_nevra(
+                &fl_pkg.name,
+                &fl_pkg.arch,
+                fl_pkg.epoch,
+                &fl_pkg.version,
+                &fl_pkg.release,
+                repo_name,
+            )?;
+
+            if let Some(id) = pkg_id {
+                let files: Vec<(String, i32)> = fl_pkg
+                    .files
+                    .iter()
+                    .map(|f| (f.path.clone(), f.file_type.as_i32()))
+                    .collect();
+                entries.push((id, files));
+                matched += 1;
+            } else {
+                debug!(
+                    name = %fl_pkg.name,
+                    arch = %fl_pkg.arch,
+                    version = %fl_pkg.version,
+                    "Filelists package not found in indexed packages"
+                );
+                unmatched += 1;
+            }
+        }
+
+        info!(matched, unmatched, "Filelists package matching completed");
+
+        if entries.is_empty() {
+            warn!("No filelists packages matched existing indexed packages");
+            return Ok(0);
+        }
+
+        // Batch insert in chunks
+        let batch_size = 500;
+        let mut total_files = 0;
+
+        for chunk in entries.chunks(batch_size) {
+            let count = self.package_store.insert_filelists_batch(chunk)?;
+            total_files += count;
+        }
+
+        info!(total_files, "Successfully indexed file entries");
+        Ok(total_files)
+    }
+
+    /// Search for packages providing a specific file
+    pub fn search_file(&self, path: &str) -> Result<Vec<(Package, String, String)>> {
+        let results = self.package_store.search_by_file_path(path)?;
+
+        let mut output = Vec::new();
+        let mut seen_pkg_ids = std::collections::HashSet::new();
+
+        for (pkg_id, full_path, file_type) in results {
+            if !seen_pkg_ids.insert(pkg_id) {
+                continue;
+            }
+            if let Some(pkg) = self.package_store.get_package(pkg_id)? {
+                let type_str = match file_type {
+                    1 => "dir".to_string(),
+                    2 => "ghost".to_string(),
+                    _ => "file".to_string(),
+                };
+                output.push((pkg, full_path, type_str));
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// List files for a specific package
+    #[allow(clippy::type_complexity)]
+    pub fn list_package_files(
+        &self,
+        name: &str,
+        arch: Option<&str>,
+        repo: Option<&str>,
+    ) -> Result<Vec<(Package, Vec<(String, String)>)>> {
+        let packages = self.package_store.search_by_name(name)?;
+
+        let mut results = Vec::new();
+        for pkg in packages {
+            if let Some(a) = arch {
+                if pkg.arch != a {
+                    continue;
+                }
+            }
+            if let Some(r) = repo {
+                if pkg.repo != r {
+                    continue;
+                }
+            }
+
+            if let Some(id) = pkg.pkg_id {
+                let files = self.package_store.get_files_for_package(id)?;
+                let typed_files: Vec<(String, String)> = files
+                    .into_iter()
+                    .map(|(path, ft)| {
+                        let type_str = match ft {
+                            1 => "dir".to_string(),
+                            2 => "ghost".to_string(),
+                            _ => "file".to_string(),
+                        };
+                        (path, type_str)
+                    })
+                    .collect();
+                results.push((pkg, typed_files));
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Check if filelists have been indexed for a repository
+    #[allow(dead_code)]
+    pub fn has_filelists(&self, repo: &str) -> Result<bool> {
+        self.package_store.has_filelists(repo)
+    }
+
+    /// Get file count
+    pub fn file_count(&self) -> Result<usize> {
+        self.package_store.count_files()
+    }
+
+    /// Get directory count
+    pub fn directory_count(&self) -> Result<usize> {
+        self.package_store.count_directories()
     }
 }

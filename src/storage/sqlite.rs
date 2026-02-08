@@ -12,6 +12,7 @@ impl PackageStore {
     /// Create a new package store
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let conn = Connection::open(db_path)?;
+        Schema::migrate(&conn)?;
         Schema::initialize(&conn)?;
         Ok(Self { conn })
     }
@@ -416,6 +417,7 @@ impl PackageStore {
     ) -> Result<i64> {
         tx.execute("DELETE FROM requires WHERE pkg_id = ?", [old_pkg_id])?;
         tx.execute("DELETE FROM provides WHERE pkg_id = ?", [old_pkg_id])?;
+        tx.execute("DELETE FROM files WHERE pkg_id = ?", [old_pkg_id])?;
         let _ = tx.execute("DELETE FROM embeddings WHERE pkg_id = ?", [old_pkg_id]);
         tx.execute("DELETE FROM packages WHERE pkg_id = ?", [old_pkg_id])?;
 
@@ -455,6 +457,7 @@ impl PackageStore {
             if let Some(id) = pkg_id {
                 tx.execute("DELETE FROM requires WHERE pkg_id = ?", [id])?;
                 tx.execute("DELETE FROM provides WHERE pkg_id = ?", [id])?;
+                tx.execute("DELETE FROM files WHERE pkg_id = ?", [id])?;
                 let _ = tx.execute("DELETE FROM embeddings WHERE pkg_id = ?", [id]);
                 tx.execute("DELETE FROM packages WHERE pkg_id = ?", [id])?;
             }
@@ -499,7 +502,7 @@ impl PackageStore {
             let tx = self.conn.transaction()?;
             tx.execute("DELETE FROM requires WHERE pkg_id = ?", [pkg_id])?;
             tx.execute("DELETE FROM provides WHERE pkg_id = ?", [pkg_id])?;
-            // Ignore error if embeddings table doesn't exist
+            tx.execute("DELETE FROM files WHERE pkg_id = ?", [pkg_id])?;
             let _ = tx.execute("DELETE FROM embeddings WHERE pkg_id = ?", [pkg_id]);
             tx.execute("DELETE FROM packages WHERE pkg_id = ?", [pkg_id])?;
             tx.commit()?;
@@ -527,7 +530,7 @@ impl PackageStore {
         for pkg_id in &pkg_ids {
             tx.execute("DELETE FROM requires WHERE pkg_id = ?", [pkg_id])?;
             tx.execute("DELETE FROM provides WHERE pkg_id = ?", [pkg_id])?;
-            // Ignore error if embeddings table doesn't exist
+            tx.execute("DELETE FROM files WHERE pkg_id = ?", [pkg_id])?;
             let _ = tx.execute("DELETE FROM embeddings WHERE pkg_id = ?", [pkg_id]);
         }
 
@@ -536,5 +539,252 @@ impl PackageStore {
 
         tx.commit()?;
         Ok(deleted)
+    }
+
+    // ── Filelists methods ───────────────────────────────────────────────
+
+    /// Find a package by NEVRA (name, epoch, version, release, arch) + repo.
+    /// Used for matching filelists.xml entries to existing packages.
+    pub fn find_package_by_nevra(
+        &self,
+        name: &str,
+        arch: &str,
+        epoch: Option<i64>,
+        version: &str,
+        release: &str,
+        repo: &str,
+    ) -> Result<Option<i64>> {
+        let epoch_val = epoch.unwrap_or(0);
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT pkg_id FROM packages
+             WHERE name = ? AND arch = ? AND version = ? AND release = ? AND repo = ?
+             AND COALESCE(epoch, 0) = ?",
+        )?;
+
+        let pkg_id: Option<i64> = stmt
+            .query_row(
+                params![name, arch, version, release, repo, epoch_val],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        Ok(pkg_id)
+    }
+
+    /// Batch insert file lists for multiple packages.
+    /// `entries`: Vec of (pkg_id, Vec<(path, file_type_int)>).
+    pub fn insert_filelists_batch(
+        &mut self,
+        entries: &[(i64, Vec<(String, i32)>)],
+    ) -> Result<usize> {
+        use std::collections::HashMap;
+
+        let tx = self.conn.transaction()?;
+        let mut count = 0;
+
+        {
+            let mut dir_cache: HashMap<String, i64> = HashMap::new();
+
+            // Pre-load existing directories into cache
+            {
+                let mut dir_stmt = tx.prepare("SELECT dir_id, path FROM directories")?;
+                let rows = dir_stmt.query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?;
+                for row in rows {
+                    let (dir_id, path) = row?;
+                    dir_cache.insert(path, dir_id);
+                }
+            }
+
+            let mut dir_insert_stmt =
+                tx.prepare_cached("INSERT OR IGNORE INTO directories (path) VALUES (?)")?;
+            let mut dir_lookup_stmt =
+                tx.prepare_cached("SELECT dir_id FROM directories WHERE path = ?")?;
+            let mut file_stmt = tx.prepare_cached(
+                "INSERT INTO files (pkg_id, dir_id, name, file_type) VALUES (?, ?, ?, ?)",
+            )?;
+
+            for (pkg_id, files) in entries {
+                for (path, file_type) in files {
+                    let is_dir = *file_type == 1; // RpmFileType::Dir
+                    let (dir_path, file_name) = split_path(path, is_dir);
+
+                    let dir_id = if let Some(&cached_id) = dir_cache.get(dir_path) {
+                        cached_id
+                    } else {
+                        dir_insert_stmt.execute(params![dir_path])?;
+                        let id: i64 =
+                            dir_lookup_stmt.query_row(params![dir_path], |row| row.get(0))?;
+                        dir_cache.insert(dir_path.to_string(), id);
+                        id
+                    };
+
+                    file_stmt.execute(params![pkg_id, dir_id, file_name, file_type])?;
+                    count += 1;
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok(count)
+    }
+
+    /// Search for packages that provide a specific file path.
+    /// If `path` contains '/', splits into dir+name for exact lookup.
+    /// Otherwise searches by filename only.
+    pub fn search_by_file_path(&self, path: &str) -> Result<Vec<(i64, String, i32)>> {
+        if path.contains('/') {
+            let (dir_path, file_name) = if path.ends_with('/') {
+                // Directory query
+                (path.trim_end_matches('/'), "")
+            } else {
+                split_path(path, false)
+            };
+
+            let mut stmt = self.conn.prepare(
+                "SELECT f.pkg_id, d.path, f.name, f.file_type
+                 FROM files f
+                 JOIN directories d ON f.dir_id = d.dir_id
+                 WHERE d.path = ? AND f.name = ?
+                 ORDER BY f.pkg_id",
+            )?;
+
+            let results = stmt
+                .query_map(params![dir_path, file_name], |row| {
+                    let dir: String = row.get(1)?;
+                    let name: String = row.get(2)?;
+                    let full = if name.is_empty() {
+                        dir
+                    } else {
+                        format!("{}/{}", dir, name)
+                    };
+                    Ok((row.get(0)?, full, row.get(3)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            Ok(results)
+        } else {
+            // Filename-only search
+            let mut stmt = self.conn.prepare(
+                "SELECT f.pkg_id, d.path, f.name, f.file_type
+                 FROM files f
+                 JOIN directories d ON f.dir_id = d.dir_id
+                 WHERE f.name = ?
+                 ORDER BY f.pkg_id
+                 LIMIT 200",
+            )?;
+
+            let results = stmt
+                .query_map(params![path], |row| {
+                    let dir: String = row.get(1)?;
+                    let name: String = row.get(2)?;
+                    let full = format!("{}/{}", dir, name);
+                    Ok((row.get(0)?, full, row.get(3)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            Ok(results)
+        }
+    }
+
+    /// List all files belonging to a package
+    pub fn get_files_for_package(&self, pkg_id: i64) -> Result<Vec<(String, i32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.path, f.name, f.file_type
+             FROM files f
+             JOIN directories d ON f.dir_id = d.dir_id
+             WHERE f.pkg_id = ?
+             ORDER BY d.path, f.name",
+        )?;
+
+        let results = stmt
+            .query_map(params![pkg_id], |row| {
+                let dir: String = row.get(0)?;
+                let name: String = row.get(1)?;
+                let full = if name.is_empty() {
+                    dir
+                } else {
+                    format!("{}/{}", dir, name)
+                };
+                Ok((full, row.get(2)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(results)
+    }
+
+    /// Check if filelists have been indexed for a given repository
+    #[allow(dead_code)]
+    pub fn has_filelists(&self, repo: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM files f
+             JOIN packages p ON f.pkg_id = p.pkg_id
+             WHERE p.repo = ?
+             LIMIT 1",
+            [repo],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Get total file count
+    pub fn count_files(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// Get total directory count
+    pub fn count_directories(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM directories", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+}
+
+/// Split a file path into (directory, filename).
+/// `/usr/bin/bash` -> (`/usr/bin`, `bash`)
+/// `/etc/nginx` with is_dir=true -> (`/etc/nginx`, ``)
+fn split_path(path: &str, is_dir: bool) -> (&str, &str) {
+    if is_dir || path == "/" {
+        (path, "")
+    } else {
+        match path.rfind('/') {
+            Some(0) => ("/", &path[1..]),
+            Some(pos) => (&path[..pos], &path[pos + 1..]),
+            None => ("/", path),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_path_regular() {
+        assert_eq!(split_path("/usr/bin/bash", false), ("/usr/bin", "bash"));
+        assert_eq!(
+            split_path("/usr/lib64/libssl.so.3", false),
+            ("/usr/lib64", "libssl.so.3")
+        );
+    }
+
+    #[test]
+    fn test_split_path_root() {
+        assert_eq!(split_path("/bash", false), ("/", "bash"));
+        assert_eq!(split_path("/", false), ("/", ""));
+    }
+
+    #[test]
+    fn test_split_path_dir() {
+        assert_eq!(split_path("/etc/nginx", true), ("/etc/nginx", ""));
+        assert_eq!(
+            split_path("/usr/share/locale", true),
+            ("/usr/share/locale", "")
+        );
     }
 }

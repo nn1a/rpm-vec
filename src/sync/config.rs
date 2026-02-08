@@ -18,6 +18,10 @@ pub struct RepoSyncConfig {
     /// Whether this repository is enabled for syncing
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Whether to also sync filelists.xml (default: false)
+    #[serde(default)]
+    pub sync_filelists: bool,
 }
 
 fn default_interval() -> u64 {
@@ -75,6 +79,7 @@ impl SyncConfig {
                     base_url: "http://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/".to_string(),
                     interval_seconds: 3600,
                     enabled: true,
+                    sync_filelists: false,
                 },
                 RepoSyncConfig {
                     name: "tizen-base".to_string(),
@@ -82,6 +87,7 @@ impl SyncConfig {
                         .to_string(),
                     interval_seconds: 3600,
                     enabled: true,
+                    sync_filelists: false,
                 },
             ],
             work_dir: default_work_dir(),
