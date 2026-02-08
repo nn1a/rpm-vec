@@ -6,14 +6,14 @@ pub fn get_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "rpm_search".to_string(),
-            description: "Search RPM packages by name, description, or semantic similarity"
+            description: "Natural language semantic search for RPM packages using vector embeddings. Best for exploratory queries like 'SSL encryption library' or 'image processing tool'. For exact name/field matching, use rpm_find instead."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query (package name, description, or natural language)"
+                        "description": "Natural language search query in English (e.g., 'compression library', 'network packet capture tool')"
                     },
                     "arch": {
                         "type": "string",
@@ -34,7 +34,7 @@ pub fn get_tools() -> Vec<Tool> {
         },
         Tool {
             name: "rpm_package_info".to_string(),
-            description: "Get detailed information about a specific RPM package".to_string(),
+            description: "Get detailed information about a specific RPM package including version, requires, provides, and file list".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -49,6 +49,11 @@ pub fn get_tools() -> Vec<Tool> {
                     "repo": {
                         "type": "string",
                         "description": "Repository name (optional)"
+                    },
+                    "include_files": {
+                        "type": "boolean",
+                        "description": "Include file list in output (default: true, set false to omit)",
+                        "default": true
                     }
                 },
                 "required": ["name"]
@@ -63,44 +68,45 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
-            name: "rpm_file_search".to_string(),
-            description: "Search for RPM packages that provide a specific file path".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "File path to search for (e.g., /usr/bin/python3 or just 'python3')"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results to return",
-                        "default": 20
-                    }
-                },
-                "required": ["path"]
-            }),
-        },
-        Tool {
-            name: "rpm_package_files".to_string(),
-            description: "List all files provided by a specific RPM package".to_string(),
+            name: "rpm_find".to_string(),
+            description: "Find RPM packages using structured filters with wildcard support (* and ?). Multiple filters are ANDed together.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Package name"
+                        "description": "Package name pattern (e.g., 'lib*ssl*', 'python?')"
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Summary keyword pattern"
+                    },
+                    "provides": {
+                        "type": "string",
+                        "description": "Provides capability pattern (e.g., 'libssl.so*')"
+                    },
+                    "requires": {
+                        "type": "string",
+                        "description": "Requires dependency pattern (e.g., 'libcrypto*')"
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "File path pattern (e.g., '/usr/bin/python*')"
                     },
                     "arch": {
                         "type": "string",
-                        "description": "Architecture (optional)"
+                        "description": "Architecture filter"
                     },
                     "repo": {
                         "type": "string",
-                        "description": "Repository name (optional)"
+                        "description": "Repository filter"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results (default 50)",
+                        "default": 50
                     }
-                },
-                "required": ["name"]
+                }
             }),
         },
     ]

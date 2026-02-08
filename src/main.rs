@@ -14,6 +14,7 @@ use config::{Config, ModelType};
 use error::Result;
 use search::SearchFilters;
 use std::path::PathBuf;
+use storage::FindFilter;
 use tracing::info;
 
 #[derive(Parser)]
@@ -83,6 +84,46 @@ enum Commands {
         /// Filter by repository
         #[arg(short, long)]
         repo: Option<String>,
+    },
+
+    /// Find packages by structured filters (name, provides, requires, file, etc.)
+    /// Supports wildcards: * (any chars), ? (single char)
+    Find {
+        /// Package name pattern (e.g., "lib*ssl*", "python?")
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Summary keyword pattern
+        #[arg(short, long)]
+        summary: Option<String>,
+
+        /// Description keyword pattern
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Provides capability pattern (e.g., "libssl.so*")
+        #[arg(short, long)]
+        provides: Option<String>,
+
+        /// Requires dependency pattern (e.g., "libcrypto*")
+        #[arg(long)]
+        requires: Option<String>,
+
+        /// File path pattern (e.g., "/usr/bin/python*", "*.so")
+        #[arg(short, long)]
+        file: Option<String>,
+
+        /// Filter by architecture
+        #[arg(short, long)]
+        arch: Option<String>,
+
+        /// Filter by repository
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Number of results to return
+        #[arg(long, default_value = "50")]
+        limit: usize,
     },
 
     /// Build embeddings for indexed packages
@@ -487,6 +528,54 @@ fn main() -> Result<()> {
                             println!("  [{}] {}", marker, path);
                         }
                         println!("  Total: {} file(s)", files.len());
+                    }
+                }
+            }
+        }
+
+        Commands::Find {
+            name,
+            summary,
+            description,
+            provides,
+            requires,
+            file,
+            arch,
+            repo,
+            limit,
+        } => {
+            let _span = tracing::info_span!("find").entered();
+            let api = api::RpmSearchApi::new(config)?;
+
+            let filter = FindFilter {
+                name,
+                summary,
+                description,
+                provides,
+                requires,
+                file,
+                arch,
+                repo,
+                limit,
+            };
+
+            let results = api.find(&filter)?;
+
+            if results.is_empty() {
+                println!("No packages found matching the given criteria.");
+            } else {
+                println!("\nFound {} package(s):\n", results.len());
+                for (i, pkg) in results.iter().enumerate() {
+                    println!(
+                        "  {}. {}-{}.{} ({})",
+                        i + 1,
+                        pkg.name,
+                        pkg.full_version(),
+                        pkg.arch,
+                        pkg.repo,
+                    );
+                    if !pkg.summary.is_empty() {
+                        println!("     {}", pkg.summary);
                     }
                 }
             }

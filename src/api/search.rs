@@ -9,7 +9,7 @@ use crate::repomd::parser::PrimaryXmlParser;
 use crate::search::{
     QueryPlanner, SearchFilters, SearchQuery, SearchResult, SemanticSearch, StructuredSearch,
 };
-use crate::storage::{PackageStore, VectorStore};
+use crate::storage::{FindFilter, PackageStore, VectorStore};
 use rusqlite::Connection;
 use std::path::Path;
 use tracing::{debug, info, instrument, warn};
@@ -558,5 +558,22 @@ impl RpmSearchApi {
     /// Get directory count
     pub fn directory_count(&self) -> Result<usize> {
         self.package_store.count_directories()
+    }
+
+    // ── General search ──────────────────────────────────────────────────
+
+    /// General-purpose structured search with multiple filters and wildcard support.
+    /// Returns matching packages ordered by name.
+    pub fn find(&self, filter: &FindFilter) -> Result<Vec<Package>> {
+        let pkg_ids = self.package_store.general_search(filter)?;
+
+        let mut packages = Vec::new();
+        for pkg_id in pkg_ids {
+            if let Some(pkg) = self.package_store.get_package(pkg_id)? {
+                packages.push(pkg);
+            }
+        }
+
+        Ok(packages)
     }
 }

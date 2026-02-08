@@ -743,6 +743,145 @@ impl PackageStore {
             .query_row("SELECT COUNT(*) FROM directories", [], |row| row.get(0))?;
         Ok(count as usize)
     }
+
+    // ── General search ──────────────────────────────────────────────────
+
+    /// General-purpose search with multiple optional filters.
+    /// All provided filters are ANDed together.
+    /// Wildcards: `*` → `%`, `?` → `_`. No wildcards → contains match.
+    pub fn general_search(&self, filter: &FindFilter) -> Result<Vec<i64>> {
+        let mut conditions = Vec::new();
+        let mut bind_values: Vec<String> = Vec::new();
+
+        // Core filters on packages table
+        if let Some(ref name) = filter.name {
+            conditions.push("p.name LIKE ?".to_string());
+            bind_values.push(wildcard_to_like(name));
+        }
+        if let Some(ref summary) = filter.summary {
+            conditions.push("p.summary LIKE ?".to_string());
+            bind_values.push(wildcard_to_like(summary));
+        }
+        if let Some(ref description) = filter.description {
+            conditions.push("p.description LIKE ?".to_string());
+            bind_values.push(wildcard_to_like(description));
+        }
+        if let Some(ref arch) = filter.arch {
+            conditions.push("p.arch = ?".to_string());
+            bind_values.push(arch.clone());
+        }
+        if let Some(ref repo) = filter.repo {
+            conditions.push("p.repo = ?".to_string());
+            bind_values.push(repo.clone());
+        }
+
+        // Subquery filters
+        if let Some(ref provides) = filter.provides {
+            conditions.push(
+                "EXISTS (SELECT 1 FROM provides pv WHERE pv.pkg_id = p.pkg_id AND pv.name LIKE ?)"
+                    .to_string(),
+            );
+            bind_values.push(wildcard_to_like(provides));
+        }
+        if let Some(ref requires) = filter.requires {
+            conditions.push(
+                "EXISTS (SELECT 1 FROM requires rq WHERE rq.pkg_id = p.pkg_id AND rq.name LIKE ?)"
+                    .to_string(),
+            );
+            bind_values.push(wildcard_to_like(requires));
+        }
+        if let Some(ref file) = filter.file {
+            let like_pattern = wildcard_to_like(file);
+            // Use subquery with directory+filename join
+            conditions.push(
+                "EXISTS (SELECT 1 FROM files f JOIN directories d ON f.dir_id = d.dir_id \
+                 WHERE f.pkg_id = p.pkg_id AND (d.path || '/' || f.name) LIKE ?)"
+                    .to_string(),
+            );
+            bind_values.push(like_pattern);
+        }
+
+        if conditions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let where_clause = conditions.join(" AND ");
+        let sql = format!(
+            "SELECT DISTINCT p.pkg_id FROM packages p WHERE {} ORDER BY p.name LIMIT ?",
+            where_clause
+        );
+        bind_values.push(filter.limit.to_string());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        // Bind all parameters dynamically
+        let params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let pkg_ids: Vec<i64> = stmt
+            .query_map(params.as_slice(), |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(pkg_ids)
+    }
+}
+
+/// Search filter for general-purpose package search.
+/// All provided fields are ANDed together.
+#[derive(Debug)]
+pub struct FindFilter {
+    /// Package name pattern (supports `*` and `?` wildcards)
+    pub name: Option<String>,
+    /// Summary text pattern
+    pub summary: Option<String>,
+    /// Description text pattern
+    pub description: Option<String>,
+    /// Provides capability pattern
+    pub provides: Option<String>,
+    /// Requires dependency pattern
+    pub requires: Option<String>,
+    /// File path pattern (searches in filelists)
+    pub file: Option<String>,
+    /// Exact architecture match
+    pub arch: Option<String>,
+    /// Exact repository match
+    pub repo: Option<String>,
+    /// Maximum results (default 50)
+    pub limit: usize,
+}
+
+impl Default for FindFilter {
+    fn default() -> Self {
+        Self {
+            name: None,
+            summary: None,
+            description: None,
+            provides: None,
+            requires: None,
+            file: None,
+            arch: None,
+            repo: None,
+            limit: 50,
+        }
+    }
+}
+
+/// Convert user wildcard pattern to SQL LIKE pattern.
+/// `*` → `%`, `?` → `_`.
+/// If no wildcards present, wraps with `%` for contains match.
+fn wildcard_to_like(pattern: &str) -> String {
+    // First escape any literal SQL LIKE special chars in the input
+    let escaped = pattern.replace('%', "\\%").replace('_', "\\_");
+
+    if pattern.contains('*') || pattern.contains('?') {
+        // Convert user wildcards to SQL LIKE wildcards
+        escaped.replace('*', "%").replace('?', "_")
+    } else {
+        // No wildcards: default to contains match
+        format!("%{}%", escaped)
+    }
 }
 
 /// Split a file path into (directory, filename).
@@ -786,5 +925,21 @@ mod tests {
             split_path("/usr/share/locale", true),
             ("/usr/share/locale", "")
         );
+    }
+
+    #[test]
+    fn test_wildcard_to_like() {
+        // No wildcards → contains match
+        assert_eq!(wildcard_to_like("ssl"), "%ssl%");
+        assert_eq!(wildcard_to_like("python3"), "%python3%");
+
+        // Wildcards
+        assert_eq!(wildcard_to_like("lib*ssl*"), "lib%ssl%");
+        assert_eq!(wildcard_to_like("python?.?"), "python_._");
+        assert_eq!(wildcard_to_like("*"), "%");
+
+        // SQL special chars escaped
+        assert_eq!(wildcard_to_like("100%"), "%100\\%%");
+        assert_eq!(wildcard_to_like("a_b"), "%a\\_b%");
     }
 }

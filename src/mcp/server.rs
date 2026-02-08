@@ -5,6 +5,7 @@ use crate::mcp::protocol::*;
 use crate::mcp::tools::get_tools;
 use crate::normalize::Package;
 use crate::search::SearchFilters;
+use crate::storage::FindFilter;
 use serde_json::Value;
 
 use std::io::{BufRead, BufReader, Write};
@@ -154,8 +155,7 @@ impl McpServer {
             "rpm_search" => self.search_packages(&tool_params.arguments)?,
             "rpm_package_info" => self.get_package_info(&tool_params.arguments)?,
             "rpm_repositories" => self.list_repositories()?,
-            "rpm_file_search" => self.search_by_file(&tool_params.arguments)?,
-            "rpm_package_files" => self.list_package_files(&tool_params.arguments)?,
+            "rpm_find" => self.find_packages(&tool_params.arguments)?,
             _ => {
                 return Ok(serde_json::to_value(ToolResult::error(format!(
                     "Unknown tool: {}",
@@ -227,6 +227,10 @@ impl McpServer {
 
         let arch = args.get("arch").and_then(|v| v.as_str()).map(String::from);
         let repo = args.get("repo").and_then(|v| v.as_str()).map(String::from);
+        let include_files = args
+            .get("include_files")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         info!(
             "Getting package info: name='{}', arch={:?}, repo={:?}",
@@ -236,8 +240,8 @@ impl McpServer {
         // Search for exact package name
         let filters = SearchFilters {
             name: None,
-            arch,
-            repo,
+            arch: arch.clone(),
+            repo: repo.clone(),
             not_requiring: None,
             providing: None,
         };
@@ -252,7 +256,7 @@ impl McpServer {
 
         let mut result = format!("Package information for '{}':\n\n", name);
 
-        for pkg in matching {
+        for pkg in &matching {
             result.push_str(&format!(
                 "Package: {}\n\
                  Version: {}\n\
@@ -282,6 +286,28 @@ impl McpServer {
                 }
             }
 
+            // Include file list if requested
+            if include_files {
+                if let Some(_pkg_id) = pkg.pkg_id {
+                    let files =
+                        self.api
+                            .list_package_files(&pkg.name, Some(&pkg.arch), Some(&pkg.repo))?;
+                    for (_, file_list) in &files {
+                        if !file_list.is_empty() {
+                            result.push_str(&format!("\nFiles ({}):\n", file_list.len()));
+                            for (path, ft) in file_list {
+                                let marker = match ft.as_str() {
+                                    "dir" => "d",
+                                    "ghost" => "g",
+                                    _ => " ",
+                                };
+                                result.push_str(&format!("  [{}] {}\n", marker, path));
+                            }
+                        }
+                    }
+                }
+            }
+
             result.push_str("\n---\n\n");
         }
 
@@ -305,77 +331,50 @@ impl McpServer {
         Ok(result)
     }
 
-    fn search_by_file(&self, args: &Value) -> Result<String> {
-        let path = args["path"]
-            .as_str()
-            .ok_or_else(|| RpmSearchError::Config("Missing 'path' parameter".to_string()))?;
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+    fn find_packages(&self, args: &Value) -> Result<String> {
+        let filter = FindFilter {
+            name: args.get("name").and_then(|v| v.as_str()).map(String::from),
+            summary: args
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            description: args
+                .get("description")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            provides: args
+                .get("provides")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            requires: args
+                .get("requires")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            file: args.get("file").and_then(|v| v.as_str()).map(String::from),
+            arch: args.get("arch").and_then(|v| v.as_str()).map(String::from),
+            repo: args.get("repo").and_then(|v| v.as_str()).map(String::from),
+            limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize,
+        };
 
-        info!(path = %path, "Searching packages by file");
+        info!("Finding packages with structured filters");
 
-        let results = self.api.search_file(path)?;
+        let results = self.api.find(&filter)?;
 
         if results.is_empty() {
-            return Ok(format!("No packages found providing '{}'.", path));
+            return Ok("No packages found matching the given criteria.".to_string());
         }
 
-        let mut text = format!(
-            "Packages providing '{}' ({} found):\n\n",
-            path,
-            results.len()
-        );
-        for (i, (pkg, full_path, file_type)) in results.iter().enumerate().take(limit) {
+        let mut text = format!("Found {} package(s):\n\n", results.len());
+        for (i, pkg) in results.iter().enumerate() {
             text.push_str(&format!(
-                "{}. {}-{}.{} ({}) [{}] {}\n",
+                "{}. {}-{}.{} ({})\n   {}\n",
                 i + 1,
                 pkg.name,
                 pkg.full_version(),
                 pkg.arch,
                 pkg.repo,
-                file_type,
-                full_path,
+                pkg.summary,
             ));
-        }
-
-        Ok(text)
-    }
-
-    fn list_package_files(&self, args: &Value) -> Result<String> {
-        let name = args["name"]
-            .as_str()
-            .ok_or_else(|| RpmSearchError::Config("Missing 'name' parameter".to_string()))?;
-        let arch = args.get("arch").and_then(|v| v.as_str());
-        let repo = args.get("repo").and_then(|v| v.as_str());
-
-        info!(name = %name, "Listing package files");
-
-        let results = self.api.list_package_files(name, arch, repo)?;
-
-        if results.is_empty() {
-            return Ok(format!(
-                "Package '{}' not found or no filelists indexed.",
-                name
-            ));
-        }
-
-        let mut text = String::new();
-        for (pkg, files) in &results {
-            text.push_str(&format!(
-                "Files in {}-{}.{} ({}):\n",
-                pkg.name,
-                pkg.full_version(),
-                pkg.arch,
-                pkg.repo
-            ));
-            if files.is_empty() {
-                text.push_str("  (no filelists indexed)\n");
-            } else {
-                for (path, ft) in files {
-                    text.push_str(&format!("  [{}] {}\n", ft, path));
-                }
-                text.push_str(&format!("Total: {} file(s)\n", files.len()));
-            }
-            text.push('\n');
         }
 
         Ok(text)
