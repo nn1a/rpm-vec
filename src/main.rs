@@ -326,12 +326,14 @@ fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
     } else {
+        // CLI mode: default to warn to keep output clean (use RUST_LOG=info for verbose)
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::filter::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
+                    .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("warn")),
             )
             .with_target(false)
+            .with_writer(std::io::stderr)
             .init();
     }
 
