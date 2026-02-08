@@ -54,3 +54,11 @@ default = []
 # GPU acceleration (optional - will fallback to CPU if unavailable)
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "cudarc", "cudarc/cuda-12000"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true
