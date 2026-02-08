@@ -31,6 +31,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    // ── Indexing ─────────────────────────────────────────────────────
     /// Index a repository from primary.xml file
     Index {
         /// Path to primary.xml, primary.xml.gz, or primary.xml.zst
@@ -61,21 +62,34 @@ enum Commands {
         repo: String,
     },
 
-    /// Search for packages that provide a specific file
-    SearchFile {
-        /// File path to search (e.g., /usr/bin/python3 or just "python3")
-        path: String,
+    /// Build embeddings for indexed packages
+    BuildEmbeddings {
+        /// Embedding model type (minilm = English, e5-multilingual = 100 languages)
+        #[arg(long, value_enum, default_value = "minilm")]
+        model_type: ModelType,
 
-        /// Number of results to return
-        #[arg(short = 'n', long, default_value = "20")]
-        limit: usize,
+        /// Model directory path (default: auto from model-type)
+        #[arg(short, long)]
+        model: Option<PathBuf>,
+
+        /// Tokenizer file path (default: auto from model-type)
+        #[arg(short, long)]
+        tokenizer: Option<PathBuf>,
+
+        /// Show progress information
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Force full rebuild (drop all embeddings and regenerate)
+        #[arg(long)]
+        rebuild: bool,
     },
 
-    /// List files provided by a package
-    ListFiles {
-        /// Package name
-        #[arg(short, long)]
-        package: String,
+    // ── Search ───────────────────────────────────────────────────────
+    /// Search packages using natural language (semantic vector search)
+    Search {
+        /// Natural language search query (e.g., 'compression library', 'image processing tool')
+        query: String,
 
         /// Filter by architecture
         #[arg(short, long)]
@@ -84,10 +98,21 @@ enum Commands {
         /// Filter by repository
         #[arg(short, long)]
         repo: Option<String>,
+
+        /// Exclude packages requiring this dependency
+        #[arg(long)]
+        not_requiring: Option<String>,
+
+        /// Include only packages providing this capability
+        #[arg(long)]
+        providing: Option<String>,
+
+        /// Number of results to return
+        #[arg(short = 'n', long, default_value = "10")]
+        top_k: usize,
     },
 
-    /// Find packages by structured filters (name, provides, requires, file, etc.)
-    /// Supports wildcards: * (any chars), ? (single char)
+    /// Find packages by structured filters with wildcard support (* and ?)
     Find {
         /// Package name pattern (e.g., "lib*ssl*", "python?")
         #[arg(short, long)]
@@ -126,33 +151,21 @@ enum Commands {
         limit: usize,
     },
 
-    /// Build embeddings for indexed packages
-    BuildEmbeddings {
-        /// Embedding model type (minilm = English, e5-multilingual = 100 languages)
-        #[arg(long, value_enum, default_value = "minilm")]
-        model_type: ModelType,
+    /// Search for packages that contain a specific file
+    SearchFile {
+        /// File path to search (e.g., /usr/bin/python3 or just "python3")
+        path: String,
 
-        /// Model directory path (default: auto from model-type)
-        #[arg(short, long)]
-        model: Option<PathBuf>,
-
-        /// Tokenizer file path (default: auto from model-type)
-        #[arg(short, long)]
-        tokenizer: Option<PathBuf>,
-
-        /// Show progress information
-        #[arg(short, long)]
-        verbose: bool,
-
-        /// Force full rebuild (drop all embeddings and regenerate)
-        #[arg(long)]
-        rebuild: bool,
+        /// Number of results to return
+        #[arg(short = 'n', long, default_value = "20")]
+        limit: usize,
     },
 
-    /// Search packages
-    Search {
-        /// Search query
-        query: String,
+    /// List files provided by a package
+    ListFiles {
+        /// Package name
+        #[arg(short, long)]
+        package: String,
 
         /// Filter by architecture
         #[arg(short, long)]
@@ -161,20 +174,9 @@ enum Commands {
         /// Filter by repository
         #[arg(short, long)]
         repo: Option<String>,
-
-        /// Exclude packages requiring this dependency
-        #[arg(long)]
-        not_requiring: Option<String>,
-
-        /// Include only packages providing this capability
-        #[arg(long)]
-        providing: Option<String>,
-
-        /// Number of results to return
-        #[arg(short = 'n', long, default_value = "10")]
-        top_k: usize,
     },
 
+    // ── Repository management ────────────────────────────────────────
     /// Show database statistics
     Stats,
 
@@ -197,9 +199,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Run MCP (Model Context Protocol) server
-    McpServer,
-
+    // ── Sync ─────────────────────────────────────────────────────────
     /// Generate example sync configuration file
     SyncInit {
         /// Output file path
@@ -223,6 +223,10 @@ enum Commands {
 
     /// Show sync status for all repositories
     SyncStatus,
+
+    // ── Server & Debug ───────────────────────────────────────────────
+    /// Run MCP (Model Context Protocol) server
+    McpServer,
 
     /// Debug search - diagnose embedding quality
     DebugSearch {
@@ -445,6 +449,12 @@ fn main() -> Result<()> {
                 println!("   Architecture: {}", pkg.arch);
                 println!("   Repository: {}", pkg.repo);
                 println!("   Summary: {}", pkg.summary);
+                if let Some(ref license) = pkg.license {
+                    println!("   License: {}", license);
+                }
+                if let Some(ref vcs) = pkg.vcs {
+                    println!("   VCS: {}", vcs);
+                }
                 if !pkg.description.is_empty() {
                     let desc = if pkg.description.len() > 200 {
                         format!("{}...", &pkg.description[..200])

@@ -1,7 +1,7 @@
 use crate::error::Result;
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 pub struct Schema;
 
@@ -28,6 +28,8 @@ impl Schema {
                 arch        TEXT NOT NULL,
                 summary     TEXT NOT NULL,
                 description TEXT NOT NULL,
+                license     TEXT,
+                vcs         TEXT,
                 repo        TEXT NOT NULL
             )",
             [],

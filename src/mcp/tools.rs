@@ -68,6 +68,25 @@ pub fn get_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "rpm_file_search".to_string(),
+            description: "Search for RPM packages that contain a specific file. Returns the package name, version, and the matched file path. Use this to answer 'which package provides /usr/bin/python3?' type questions.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path or filename to search (e.g., '/usr/bin/python3', 'libssl.so.3')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default 20)",
+                        "default": 20
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
             name: "rpm_find".to_string(),
             description: "Find RPM packages using structured filters with wildcard support (* and ?). Multiple filters are ANDed together.".to_string(),
             input_schema: json!({

@@ -42,6 +42,8 @@ impl PrimaryXmlParser {
                                 arch: String::new(),
                                 summary: String::new(),
                                 description: String::new(),
+                                license: None,
+                                vcs: None,
                                 packager: None,
                                 url: None,
                                 requires: Vec::new(),
@@ -67,6 +69,9 @@ impl PrimaryXmlParser {
                                         "rel" => {
                                             pkg.release = value.to_string();
                                         }
+                                        "vcs" => {
+                                            pkg.vcs = Some(value.to_string());
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -79,6 +84,9 @@ impl PrimaryXmlParser {
                             current_text.clear();
                         }
                         "description" => {
+                            current_text.clear();
+                        }
+                        "rpm:license" => {
                             current_text.clear();
                         }
                         "rpm:requires" => {
@@ -163,6 +171,13 @@ impl PrimaryXmlParser {
                         "description" => {
                             if let Some(pkg) = current_package.as_mut() {
                                 pkg.description = current_text.clone();
+                            }
+                        }
+                        "rpm:license" => {
+                            if let Some(pkg) = current_package.as_mut() {
+                                if !current_text.is_empty() {
+                                    pkg.license = Some(current_text.clone());
+                                }
                             }
                         }
                         "rpm:requires" | "rpm:provides" => {
@@ -251,5 +266,50 @@ mod tests {
         assert_eq!(pkg.requires[0].name, "glibc");
         assert_eq!(pkg.requires[0].flags.as_deref(), Some("GE"));
         assert_eq!(pkg.requires[1].name, "libcrypto.so.3()(64bit)");
+    }
+
+    #[test]
+    fn test_parse_license_and_vcs() {
+        let xml = r#"<?xml version="1.0"?>
+        <metadata xmlns="http://linux.duke.edu/metadata/common"
+                  xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+          <package>
+            <name>bash</name>
+            <arch>x86_64</arch>
+            <version epoch="0" ver="5.2.15" rel="3.el9" vcs="https://github.com/bminor/bash#devel"/>
+            <summary>The GNU Bourne Again shell</summary>
+            <description>The GNU Bourne Again shell</description>
+            <rpm:license>GPLv3+</rpm:license>
+          </package>
+        </metadata>"#;
+
+        let packages = PrimaryXmlParser::parse(xml.as_bytes()).unwrap();
+        assert_eq!(packages.len(), 1);
+        let pkg = &packages[0];
+        assert_eq!(pkg.name, "bash");
+        assert_eq!(pkg.license.as_deref(), Some("GPLv3+"));
+        assert_eq!(
+            pkg.vcs.as_deref(),
+            Some("https://github.com/bminor/bash#devel")
+        );
+    }
+
+    #[test]
+    fn test_parse_no_license_no_vcs() {
+        let xml = r#"<?xml version="1.0"?>
+        <metadata xmlns="http://linux.duke.edu/metadata/common">
+          <package>
+            <name>minimal</name>
+            <arch>noarch</arch>
+            <version epoch="0" ver="1.0" rel="1"/>
+            <summary>Minimal package</summary>
+            <description>No license or vcs</description>
+          </package>
+        </metadata>"#;
+
+        let packages = PrimaryXmlParser::parse(xml.as_bytes()).unwrap();
+        let pkg = &packages[0];
+        assert!(pkg.license.is_none());
+        assert!(pkg.vcs.is_none());
     }
 }

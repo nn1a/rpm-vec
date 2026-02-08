@@ -155,6 +155,7 @@ impl McpServer {
             "rpm_search" => self.search_packages(&tool_params.arguments)?,
             "rpm_package_info" => self.get_package_info(&tool_params.arguments)?,
             "rpm_repositories" => self.list_repositories()?,
+            "rpm_file_search" => self.search_by_file(&tool_params.arguments)?,
             "rpm_find" => self.find_packages(&tool_params.arguments)?,
             _ => {
                 return Ok(serde_json::to_value(ToolResult::error(format!(
@@ -272,6 +273,13 @@ impl McpServer {
                 pkg.description
             ));
 
+            if let Some(ref license) = pkg.license {
+                result.push_str(&format!("License: {}\n", license));
+            }
+            if let Some(ref vcs) = pkg.vcs {
+                result.push_str(&format!("VCS: {}\n", vcs));
+            }
+
             if !pkg.requires.is_empty() {
                 result.push_str("\nRequires:\n");
                 for dep in &pkg.requires {
@@ -329,6 +337,48 @@ impl McpServer {
         }
 
         Ok(result)
+    }
+
+    fn search_by_file(&self, args: &Value) -> Result<String> {
+        let path = args["path"]
+            .as_str()
+            .ok_or_else(|| RpmSearchError::Config("Missing 'path' parameter".to_string()))?;
+
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+
+        info!("Searching packages by file: path='{}'", path);
+
+        let mut results = self.api.search_file(path)?;
+        results.truncate(limit);
+
+        if results.is_empty() {
+            return Ok(format!("No packages found containing file '{}'.", path));
+        }
+
+        let mut text = format!(
+            "Found {} package(s) containing '{}':\n\n",
+            results.len(),
+            path
+        );
+        for (i, (pkg, full_path, file_type)) in results.iter().enumerate() {
+            let marker = match file_type.as_str() {
+                "dir" => "[d]",
+                "ghost" => "[g]",
+                _ => "   ",
+            };
+            text.push_str(&format!(
+                "{}. {}-{}.{} ({})\n   {} {}\n",
+                i + 1,
+                pkg.name,
+                pkg.full_version(),
+                pkg.arch,
+                pkg.repo,
+                marker,
+                full_path,
+            ));
+        }
+
+        Ok(text)
     }
 
     fn find_packages(&self, args: &Value) -> Result<String> {

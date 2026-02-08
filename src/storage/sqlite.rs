@@ -29,8 +29,8 @@ impl PackageStore {
     /// Insert a single package within an existing transaction
     fn insert_package_in_tx(tx: &rusqlite::Transaction, package: &Package) -> Result<i64> {
         tx.execute(
-            "INSERT INTO packages (name, epoch, version, release, arch, summary, description, repo)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO packages (name, epoch, version, release, arch, summary, description, license, vcs, repo)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 package.name,
                 package.epoch,
@@ -39,6 +39,8 @@ impl PackageStore {
                 package.arch,
                 package.summary,
                 package.description,
+                package.license,
+                package.vcs,
                 package.repo,
             ],
         )?;
@@ -69,8 +71,8 @@ impl PackageStore {
 
         {
             let mut pkg_stmt = tx.prepare_cached(
-                "INSERT INTO packages (name, epoch, version, release, arch, summary, description, repo)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO packages (name, epoch, version, release, arch, summary, description, license, vcs, repo)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )?;
             let mut req_stmt = tx.prepare_cached(
                 "INSERT INTO requires (pkg_id, name, flags, version) VALUES (?, ?, ?, ?)",
@@ -88,6 +90,8 @@ impl PackageStore {
                     package.arch,
                     package.summary,
                     package.description,
+                    package.license,
+                    package.vcs,
                     package.repo,
                 ])?;
 
@@ -112,7 +116,7 @@ impl PackageStore {
     /// Get a package by pkg_id
     pub fn get_package(&self, pkg_id: i64) -> Result<Option<Package>> {
         let mut stmt = self.conn.prepare(
-            "SELECT pkg_id, name, epoch, version, release, arch, summary, description, repo
+            "SELECT pkg_id, name, epoch, version, release, arch, summary, description, license, vcs, repo
              FROM packages WHERE pkg_id = ?",
         )?;
 
@@ -127,7 +131,9 @@ impl PackageStore {
                     arch: row.get(5)?,
                     summary: row.get(6)?,
                     description: row.get(7)?,
-                    repo: row.get(8)?,
+                    license: row.get(8)?,
+                    vcs: row.get(9)?,
+                    repo: row.get(10)?,
                     requires: Vec::new(),
                     provides: Vec::new(),
                 })

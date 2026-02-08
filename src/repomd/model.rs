@@ -10,6 +10,8 @@ pub struct RpmPackage {
     pub arch: String,
     pub summary: String,
     pub description: String,
+    pub license: Option<String>,
+    pub vcs: Option<String>,
     pub packager: Option<String>,
     pub url: Option<String>,
     pub requires: Vec<RpmDependency>,
