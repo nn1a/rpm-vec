@@ -30,6 +30,55 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum SyncCommands {
+    /// Generate example sync configuration file
+    Init {
+        /// Output file path
+        #[arg(short, long, default_value = "sync-config.toml")]
+        output: PathBuf,
+    },
+
+    /// Perform one-time sync of all repositories
+    Once {
+        /// Sync configuration file
+        #[arg(short, long, default_value = "sync-config.toml")]
+        config: PathBuf,
+    },
+
+    /// Run sync daemon (continuous background syncing)
+    Daemon {
+        /// Sync configuration file
+        #[arg(short, long, default_value = "sync-config.toml")]
+        config: PathBuf,
+    },
+
+    /// Show sync status for all repositories
+    Status,
+}
+
+#[derive(Subcommand)]
+enum RepoCommands {
+    /// List all indexed repositories
+    List,
+
+    /// Show repository statistics
+    Stats {
+        /// Repository name
+        repo: String,
+    },
+
+    /// Delete a repository and all its packages
+    Delete {
+        /// Repository name
+        repo: String,
+
+        /// Confirm deletion
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     // ── Indexing ─────────────────────────────────────────────────────
     /// Index a repository from primary.xml file
@@ -180,49 +229,18 @@ enum Commands {
     /// Show database statistics
     Stats,
 
-    /// List all indexed repositories
-    ListRepos,
-
-    /// Show repository statistics
-    RepoStats {
-        /// Repository name
-        repo: String,
-    },
-
-    /// Delete a repository and all its packages
-    DeleteRepo {
-        /// Repository name
-        repo: String,
-
-        /// Confirm deletion
-        #[arg(short, long)]
-        yes: bool,
+    /// Repository management commands
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommands,
     },
 
     // ── Sync ─────────────────────────────────────────────────────────
-    /// Generate example sync configuration file
-    SyncInit {
-        /// Output file path
-        #[arg(short, long, default_value = "sync-config.toml")]
-        output: PathBuf,
+    /// Sync repository metadata
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommands,
     },
-
-    /// Perform one-time sync of all repositories
-    SyncOnce {
-        /// Sync configuration file
-        #[arg(short, long, default_value = "sync-config.toml")]
-        config: PathBuf,
-    },
-
-    /// Run sync daemon (continuous background syncing)
-    SyncDaemon {
-        /// Sync configuration file
-        #[arg(short, long, default_value = "sync-config.toml")]
-        config: PathBuf,
-    },
-
-    /// Show sync status for all repositories
-    SyncStatus,
 
     // ── Model management ────────────────────────────────────────────
     /// Download embedding model from HuggingFace Hub
@@ -619,62 +637,64 @@ fn main() -> Result<()> {
             println!("  Total directories: {}", dir_count);
         }
 
-        Commands::ListRepos => {
-            let _span = tracing::info_span!("list_repos").entered();
-            let api = api::RpmSearchApi::new(config)?;
-            let repos = api.list_repositories()?;
+        Commands::Repo { command } => match command {
+            RepoCommands::List => {
+                let _span = tracing::info_span!("list_repos").entered();
+                let api = api::RpmSearchApi::new(config)?;
+                let repos = api.list_repositories()?;
 
-            info!(repo_count = repos.len(), "Retrieved repository list");
+                info!(repo_count = repos.len(), "Retrieved repository list");
 
-            if repos.is_empty() {
-                println!("No repositories indexed yet.");
-            } else {
-                println!("\nIndexed Repositories:\n");
-                println!("{:<30} {:>10}", "Repository", "Packages");
-                println!("{}", "─".repeat(42));
-                for (repo_name, count) in repos {
-                    println!("{:<30} {:>10}", repo_name, count);
+                if repos.is_empty() {
+                    println!("No repositories indexed yet.");
+                } else {
+                    println!("\nIndexed Repositories:\n");
+                    println!("{:<30} {:>10}", "Repository", "Packages");
+                    println!("{}", "─".repeat(42));
+                    for (repo_name, count) in repos {
+                        println!("{:<30} {:>10}", repo_name, count);
+                    }
                 }
             }
-        }
 
-        Commands::RepoStats { repo } => {
-            let _span = tracing::info_span!("repo_stats", repo = %repo).entered();
-            let api = api::RpmSearchApi::new(config)?;
-            let count = api.repo_package_count(&repo)?;
+            RepoCommands::Stats { repo } => {
+                let _span = tracing::info_span!("repo_stats", repo = %repo).entered();
+                let api = api::RpmSearchApi::new(config)?;
+                let count = api.repo_package_count(&repo)?;
 
-            info!(count, "Retrieved repository statistics");
+                info!(count, "Retrieved repository statistics");
 
-            println!("\nRepository: {}", repo);
-            println!("  Packages: {}", count);
-        }
-
-        Commands::DeleteRepo { repo, yes } => {
-            let _span = tracing::info_span!("delete_repo", repo = %repo).entered();
-
-            if !yes {
-                println!(
-                    "⚠️  This will permanently delete repository '{}' and all its packages.",
-                    repo
-                );
-                println!("   Use --yes to confirm deletion.");
-                return Ok(());
+                println!("\nRepository: {}", repo);
+                println!("  Packages: {}", count);
             }
 
-            let mut api = api::RpmSearchApi::new(config)?;
-            let deleted = api.delete_repository(&repo)?;
+            RepoCommands::Delete { repo, yes } => {
+                let _span = tracing::info_span!("delete_repo", repo = %repo).entered();
 
-            info!(deleted, "Deleted repository");
+                if !yes {
+                    println!(
+                        "⚠️  This will permanently delete repository '{}' and all its packages.",
+                        repo
+                    );
+                    println!("   Use --yes to confirm deletion.");
+                    return Ok(());
+                }
 
-            if deleted == 0 {
-                println!("Repository '{}' not found or already empty.", repo);
-            } else {
-                println!(
-                    "✓ Deleted repository '{}' ({} packages removed)",
-                    repo, deleted
-                );
+                let mut api = api::RpmSearchApi::new(config)?;
+                let deleted = api.delete_repository(&repo)?;
+
+                info!(deleted, "Deleted repository");
+
+                if deleted == 0 {
+                    println!("Repository '{}' not found or already empty.", repo);
+                } else {
+                    println!(
+                        "✓ Deleted repository '{}' ({} packages removed)",
+                        repo, deleted
+                    );
+                }
             }
-        }
+        },
 
         Commands::DownloadModel { model_type } => {
             let _span = tracing::info_span!("download_model", model_type = %model_type).entered();
@@ -703,136 +723,140 @@ fn main() -> Result<()> {
             server.run()?;
         }
 
-        Commands::SyncInit { output } => {
-            let _span = tracing::info_span!("sync_init", output = %output.display()).entered();
-            info!("Generating example sync configuration");
+        Commands::Sync { command } => match command {
+            SyncCommands::Init { output } => {
+                let _span = tracing::info_span!("sync_init", output = %output.display()).entered();
+                info!("Generating example sync configuration");
 
-            let example_config = sync::SyncConfig::example();
-            example_config.to_file(&output)?;
+                let example_config = sync::SyncConfig::example();
+                example_config.to_file(&output)?;
 
-            println!("✓ Created example sync configuration: {}", output.display());
-            println!("\nEdit this file to configure your repositories, then run:");
-            println!("  rpm_repo_search sync-once --config {}", output.display());
-            println!(
-                "  rpm_repo_search sync-daemon --config {}",
-                output.display()
-            );
-        }
-
-        Commands::SyncOnce {
-            config: sync_config_path,
-        } => {
-            let _span =
-                tracing::info_span!("sync_once", config = %sync_config_path.display()).entered();
-            info!("Performing one-time sync");
-
-            let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
-            let scheduler = sync::SyncScheduler::new(sync_config, config.clone());
-
-            let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-                error::RpmSearchError::Config(format!("Failed to create runtime: {}", e))
-            })?;
-
-            let results = runtime.block_on(scheduler.sync_once())?;
-
-            println!("\nSync Results:");
-            println!("{:<30} {:<15}", "Repository", "Status");
-            println!("{}", "─".repeat(47));
-
-            for (repo, result) in results {
-                let status = match result {
-                    Ok(_) => "✓ Success",
-                    Err(ref e) => {
-                        eprintln!("Error for {}: {}", repo, e);
-                        "✗ Failed"
-                    }
-                };
-                println!("{:<30} {:<15}", repo, status);
-            }
-
-            // Automatically build embeddings incrementally after sync
-            println!("\n🔨 Building embeddings for new packages...");
-            let model_files = embedding::hub::resolve_model_files(&config.model_type, None, None)?;
-            let api = api::RpmSearchApi::new(config.clone())?;
-            let embedder =
-                embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
-            let count = api.build_embeddings(&embedder, false, false)?;
-            if count > 0 {
-                println!("✅ Built embeddings for {} new packages", count);
-            } else {
-                println!("✅ All embeddings up to date");
-            }
-        }
-
-        Commands::SyncDaemon {
-            config: sync_config_path,
-        } => {
-            let _span =
-                tracing::info_span!("sync_daemon", config = %sync_config_path.display()).entered();
-            info!("Starting sync daemon");
-
-            let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
-            let scheduler = sync::SyncScheduler::new(sync_config, config);
-
-            println!("Starting sync daemon...");
-            println!("Press Ctrl+C to stop");
-
-            let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-                error::RpmSearchError::Config(format!("Failed to create runtime: {}", e))
-            })?;
-
-            runtime.block_on(scheduler.run_daemon())?;
-        }
-
-        Commands::SyncStatus => {
-            let _span = tracing::info_span!("sync_status").entered();
-            info!("Retrieving sync status");
-
-            let conn = rusqlite::Connection::open(&config.db_path)?;
-            let state_store = sync::SyncStateStore::new(conn)?;
-            let states = state_store.list_states()?;
-
-            if states.is_empty() {
-                println!("No sync state found. Run 'sync-once' or 'sync-daemon' first.");
-            } else {
-                println!("\nSync Status:");
+                println!("✓ Created example sync configuration: {}", output.display());
+                println!("\nEdit this file to configure your repositories, then run:");
+                println!("  rpm_repo_search sync once --config {}", output.display());
                 println!(
-                    "{:<25} {:<15} {:<25} {:<15}",
-                    "Repository", "Status", "Last Sync", "Checksum"
+                    "  rpm_repo_search sync daemon --config {}",
+                    output.display()
                 );
-                println!("{}", "─".repeat(82));
+            }
 
-                for state in states {
-                    let last_sync_str = state
-                        .last_sync
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "Never".to_string());
+            SyncCommands::Once {
+                config: sync_config_path,
+            } => {
+                let _span = tracing::info_span!("sync_once", config = %sync_config_path.display())
+                    .entered();
+                info!("Performing one-time sync");
 
-                    let checksum_short = state
-                        .last_checksum
-                        .map(|s| {
-                            if s.len() > 12 {
-                                format!("{}...", &s[..12])
-                            } else {
-                                s
-                            }
-                        })
-                        .unwrap_or_else(|| "N/A".to_string());
+                let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
+                let scheduler = sync::SyncScheduler::new(sync_config, config.clone());
 
+                let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+                    error::RpmSearchError::Config(format!("Failed to create runtime: {}", e))
+                })?;
+
+                let results = runtime.block_on(scheduler.sync_once())?;
+
+                println!("\nSync Results:");
+                println!("{:<30} {:<15}", "Repository", "Status");
+                println!("{}", "─".repeat(47));
+
+                for (repo, result) in results {
+                    let status = match result {
+                        Ok(_) => "✓ Success",
+                        Err(ref e) => {
+                            eprintln!("Error for {}: {}", repo, e);
+                            "✗ Failed"
+                        }
+                    };
+                    println!("{:<30} {:<15}", repo, status);
+                }
+
+                // Automatically build embeddings incrementally after sync
+                println!("\n🔨 Building embeddings for new packages...");
+                let model_files =
+                    embedding::hub::resolve_model_files(&config.model_type, None, None)?;
+                let api = api::RpmSearchApi::new(config.clone())?;
+                let embedder =
+                    embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
+                let count = api.build_embeddings(&embedder, false, false)?;
+                if count > 0 {
+                    println!("✅ Built embeddings for {} new packages", count);
+                } else {
+                    println!("✅ All embeddings up to date");
+                }
+            }
+
+            SyncCommands::Daemon {
+                config: sync_config_path,
+            } => {
+                let _span =
+                    tracing::info_span!("sync_daemon", config = %sync_config_path.display())
+                        .entered();
+                info!("Starting sync daemon");
+
+                let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
+                let scheduler = sync::SyncScheduler::new(sync_config, config);
+
+                println!("Starting sync daemon...");
+                println!("Press Ctrl+C to stop");
+
+                let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+                    error::RpmSearchError::Config(format!("Failed to create runtime: {}", e))
+                })?;
+
+                runtime.block_on(scheduler.run_daemon())?;
+            }
+
+            SyncCommands::Status => {
+                let _span = tracing::info_span!("sync_status").entered();
+                info!("Retrieving sync status");
+
+                let conn = rusqlite::Connection::open(&config.db_path)?;
+                let state_store = sync::SyncStateStore::new(conn)?;
+                let states = state_store.list_states()?;
+
+                if states.is_empty() {
+                    println!("No sync state found. Run 'sync once' or 'sync daemon' first.");
+                } else {
+                    println!("\nSync Status:");
                     println!(
                         "{:<25} {:<15} {:<25} {:<15}",
-                        state.repo_name,
-                        state.last_status.to_string(),
-                        last_sync_str,
-                        checksum_short
+                        "Repository", "Status", "Last Sync", "Checksum"
                     );
+                    println!("{}", "─".repeat(82));
 
-                    if let Some(error) = state.last_error {
-                        println!("  Error: {}", error);
+                    for state in states {
+                        let last_sync_str = state
+                            .last_sync
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| "Never".to_string());
+
+                        let checksum_short = state
+                            .last_checksum
+                            .map(|s| {
+                                if s.len() > 12 {
+                                    format!("{}...", &s[..12])
+                                } else {
+                                    s
+                                }
+                            })
+                            .unwrap_or_else(|| "N/A".to_string());
+
+                        println!(
+                            "{:<25} {:<15} {:<25} {:<15}",
+                            state.repo_name,
+                            state.last_status.to_string(),
+                            last_sync_str,
+                            checksum_short
+                        );
+
+                        if let Some(error) = state.last_error {
+                            println!("  Error: {}", error);
+                        }
                     }
                 }
             }
-        }
+        },
 
         Commands::DebugSearch { query, pkg_ids } => {
             let mut config = config;
