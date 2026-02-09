@@ -41,53 +41,59 @@ impl EmbeddingModel {
         Device::Cpu
     }
 
-    /// Load an embedding model from local files
-    pub fn load<P: AsRef<Path>>(model_path: P, model_type: &ModelType) -> Result<Self> {
+    /// Load an embedding model from individual file paths
+    pub fn load_from_files(config_path: &Path, weights_path: &Path) -> Result<Self> {
         let device = Self::select_device();
 
         // Load model config
-        let config_path = model_path.as_ref().join("config.json");
-        let config_str = std::fs::read_to_string(&config_path).map_err(|e| {
+        let config_str = std::fs::read_to_string(config_path).map_err(|e| {
             RpmSearchError::ModelLoad(format!(
-                "Failed to read config from {}: {}\n\n\
-                Please download the {} model:\n\
-                1. Visit: {}\n\
-                2. Download: config.json, model.safetensors, tokenizer.json\n\
-                3. Place in: {}",
+                "Failed to read config from {}: {}",
                 config_path.display(),
                 e,
-                model_type.display_name(),
-                model_type.huggingface_url(),
-                model_path.as_ref().display()
             ))
         })?;
         let config: Config = serde_json::from_str(&config_str)
             .map_err(|e| RpmSearchError::ModelLoad(format!("Failed to parse config: {}", e)))?;
 
         // Load model weights
-        let weights_path = model_path.as_ref().join("model.safetensors");
         if !weights_path.exists() {
             return Err(RpmSearchError::ModelLoad(format!(
-                "Model weights not found: {}\n\n\
-                Please download the {} model:\n\
-                1. Visit: {}\n\
-                2. Download: config.json, model.safetensors, tokenizer.json\n\
-                3. Place in: {}",
+                "Model weights not found: {}",
                 weights_path.display(),
-                model_type.display_name(),
-                model_type.huggingface_url(),
-                model_path.as_ref().display()
             )));
         }
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path], candle_core::DType::F32, &device)
-                .map_err(|e| RpmSearchError::ModelLoad(format!("Failed to load weights: {}", e)))?
+            VarBuilder::from_mmaped_safetensors(
+                &[weights_path.to_path_buf()],
+                candle_core::DType::F32,
+                &device,
+            )
+            .map_err(|e| RpmSearchError::ModelLoad(format!("Failed to load weights: {}", e)))?
         };
 
         let model = BertModel::load(vb, &config)
             .map_err(|e| RpmSearchError::ModelLoad(format!("Failed to load model: {}", e)))?;
 
         Ok(Self { model, device })
+    }
+
+    /// Load an embedding model from a local directory
+    pub fn load<P: AsRef<Path>>(model_path: P, model_type: &ModelType) -> Result<Self> {
+        let config_path = model_path.as_ref().join("config.json");
+        let weights_path = model_path.as_ref().join("model.safetensors");
+        Self::load_from_files(&config_path, &weights_path).map_err(|e| {
+            RpmSearchError::ModelLoad(format!(
+                "{}\n\nPlease download the {} model:\n\
+                1. Visit: {}\n\
+                2. Download: config.json, model.safetensors, tokenizer.json\n\
+                3. Place in: {}",
+                e,
+                model_type.display_name(),
+                model_type.huggingface_url(),
+                model_path.as_ref().display()
+            ))
+        })
     }
 
     /// Generate embeddings for a batch of texts

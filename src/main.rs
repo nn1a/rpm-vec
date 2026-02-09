@@ -224,6 +224,14 @@ enum Commands {
     /// Show sync status for all repositories
     SyncStatus,
 
+    // ── Model management ────────────────────────────────────────────
+    /// Download embedding model from HuggingFace Hub
+    DownloadModel {
+        /// Model type to download
+        #[arg(long, value_enum, default_value = "minilm")]
+        model_type: ModelType,
+    },
+
     // ── Server & Debug ───────────────────────────────────────────────
     /// Run MCP (Model Context Protocol) server
     McpServer,
@@ -377,14 +385,18 @@ fn main() -> Result<()> {
             verbose,
             rebuild,
         } => {
-            // Resolve model/tokenizer paths from model_type defaults or explicit overrides
-            let model_path = model.unwrap_or_else(|| model_type.default_model_path());
-            let tokenizer_path = tokenizer.unwrap_or_else(|| model_type.default_tokenizer_path());
+            // Resolve model files: custom paths > local dir > hf-hub download
+            let model_files = embedding::hub::resolve_model_files(
+                &model_type,
+                model.as_deref(),
+                tokenizer.as_deref(),
+            )?;
 
             let _span = tracing::info_span!("build_embeddings",
                 model_type = %model_type,
-                model = %model_path.display(),
-                tokenizer = %tokenizer_path.display(),
+                config = %model_files.config.display(),
+                weights = %model_files.weights.display(),
+                tokenizer = %model_files.tokenizer.display(),
                 verbose,
                 rebuild
             )
@@ -392,15 +404,16 @@ fn main() -> Result<()> {
             info!("Building embeddings");
             let mut config = config;
             config.model_type = model_type;
-            config.model_path = model_path;
-            config.tokenizer_path = tokenizer_path;
+            config.model_path = model_files
+                .weights
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
+            config.tokenizer_path = model_files.tokenizer.clone();
 
             let api = api::RpmSearchApi::new(config.clone())?;
-            let embedder = embedding::Embedder::new(
-                &config.model_path,
-                &config.tokenizer_path,
-                config.model_type.clone(),
-            )?;
+            let embedder =
+                embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
             let count = api.build_embeddings(&embedder, verbose, rebuild)?;
             info!(count, "Successfully built embeddings");
         }
@@ -663,6 +676,26 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::DownloadModel { model_type } => {
+            let _span = tracing::info_span!("download_model", model_type = %model_type).entered();
+            info!("Downloading model");
+
+            println!(
+                "Downloading {} model from HuggingFace Hub...",
+                model_type.display_name()
+            );
+            println!("Repository: {}", model_type.huggingface_url());
+            println!();
+
+            let hub = embedding::ModelHub::new()?;
+            let files = hub.get_model_files(&model_type)?;
+
+            println!("Model files downloaded successfully:");
+            println!("  Config:    {}", files.config.display());
+            println!("  Weights:   {}", files.weights.display());
+            println!("  Tokenizer: {}", files.tokenizer.display());
+        }
+
         Commands::McpServer => {
             let _span = tracing::info_span!("mcp_server").entered();
             info!("Starting MCP server");
@@ -719,12 +752,10 @@ fn main() -> Result<()> {
 
             // Automatically build embeddings incrementally after sync
             println!("\n🔨 Building embeddings for new packages...");
+            let model_files = embedding::hub::resolve_model_files(&config.model_type, None, None)?;
             let api = api::RpmSearchApi::new(config.clone())?;
-            let embedder = embedding::Embedder::new(
-                &config.model_path,
-                &config.tokenizer_path,
-                config.model_type.clone(),
-            )?;
+            let embedder =
+                embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
             let count = api.build_embeddings(&embedder, false, false)?;
             if count > 0 {
                 println!("✅ Built embeddings for {} new packages", count);
@@ -816,17 +847,13 @@ fn main() -> Result<()> {
             if let Some(ref db_type_str) = db_model_type {
                 if let Some(detected) = ModelType::from_db_str(db_type_str) {
                     info!(model = %detected, "Auto-detected embedding model from DB");
-                    config.model_type = detected.clone();
-                    config.model_path = detected.default_model_path();
-                    config.tokenizer_path = detected.default_tokenizer_path();
+                    config.model_type = detected;
                 }
             }
 
-            let embedder = embedding::Embedder::new(
-                &config.model_path,
-                &config.tokenizer_path,
-                config.model_type.clone(),
-            )?;
+            let model_files = embedding::hub::resolve_model_files(&config.model_type, None, None)?;
+            let embedder =
+                embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
 
             // Embed the query (auto-adds prefix for E5 models)
             let query_embedding = embedder.embed_query(&query)?;

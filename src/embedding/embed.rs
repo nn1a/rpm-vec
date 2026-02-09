@@ -1,4 +1,5 @@
 use crate::config::ModelType;
+use crate::embedding::hub::ModelFiles;
 use crate::embedding::model::EmbeddingModel;
 use crate::error::{Result, RpmSearchError};
 use std::path::Path;
@@ -36,6 +37,20 @@ impl Embedder {
         }
 
         let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| RpmSearchError::ModelLoad(format!("Failed to load tokenizer: {}", e)))?;
+
+        Ok(Self {
+            model,
+            tokenizer,
+            model_type,
+        })
+    }
+
+    /// Create an embedder from resolved model files (used with hf-hub)
+    pub fn from_model_files(files: &ModelFiles, model_type: ModelType) -> Result<Self> {
+        let model = EmbeddingModel::load_from_files(&files.config, &files.weights)?;
+
+        let tokenizer = Tokenizer::from_file(&files.tokenizer)
             .map_err(|e| RpmSearchError::ModelLoad(format!("Failed to load tokenizer: {}", e)))?;
 
         Ok(Self {

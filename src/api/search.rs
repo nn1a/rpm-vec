@@ -348,11 +348,9 @@ impl RpmSearchApi {
             self.config.model_type.clone()
         };
 
-        let model_path = model_type.default_model_path();
-        let tokenizer_path = model_type.default_tokenizer_path();
-
-        // Create embedder with the detected model type
-        let embedder = Embedder::new(&model_path, &tokenizer_path, model_type)?;
+        // Resolve model files: local dir > hf-hub cache > download
+        let model_files = crate::embedding::hub::resolve_model_files(&model_type, None, None)?;
+        let embedder = Embedder::from_model_files(&model_files, model_type)?;
 
         debug!("Initializing search components");
         let semantic_search = SemanticSearch::new(vector_store, embedder);

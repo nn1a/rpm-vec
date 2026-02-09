@@ -63,6 +63,14 @@ impl ModelType {
         }
     }
 
+    /// HuggingFace repository ID for hf-hub API
+    pub fn hf_repo_id(&self) -> &'static str {
+        match self {
+            ModelType::Minilm => "sentence-transformers/all-MiniLM-L6-v2",
+            ModelType::E5Multilingual => "intfloat/multilingual-e5-small",
+        }
+    }
+
     /// Whether this model requires query/passage prefix
     pub fn requires_prefix(&self) -> bool {
         match self {

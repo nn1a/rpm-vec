@@ -27,6 +27,9 @@ pub enum RpmSearchError {
     #[allow(dead_code)]
     InvalidPackage(String),
 
+    #[error("Model download error: {0}")]
+    ModelDownload(String),
+
     #[error("Fetch error: {0}")]
     Fetch(String),
 
