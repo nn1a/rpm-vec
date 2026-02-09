@@ -12,7 +12,9 @@ mod sync;
 use clap::{Parser, Subcommand};
 use config::{Config, ModelType};
 use error::Result;
+use normalize::Package;
 use search::SearchFilters;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use storage::FindFilter;
 use tracing::info;
@@ -250,6 +252,65 @@ enum Commands {
         model_type: ModelType,
     },
 
+    // ── Repoquery ─────────────────────────────────────────────────────
+    /// Query packages from indexed repositories (similar to dnf repoquery)
+    Repoquery {
+        /// Package name or glob pattern (e.g., "bash", "lib*ssl*")
+        package: Option<String>,
+
+        // -- Query mode --
+        /// Find packages that provide a capability (e.g., "libssl.so*")
+        #[arg(long)]
+        whatprovides: Option<String>,
+
+        /// Find packages that require a capability
+        #[arg(long)]
+        whatrequires: Option<String>,
+
+        /// Find packages that own a specific file
+        #[arg(long)]
+        file: Option<String>,
+
+        // -- Output mode --
+        /// Show detailed package information
+        #[arg(short, long)]
+        info: bool,
+
+        /// List files in matched packages
+        #[arg(short, long)]
+        list: bool,
+
+        /// Show requires of matched packages
+        #[arg(long)]
+        requires: bool,
+
+        /// Show provides of matched packages
+        #[arg(long)]
+        provides: bool,
+
+        /// Custom output format (supports %{name}, %{version}, %{release}, %{epoch}, %{arch},
+        /// %{summary}, %{description}, %{license}, %{repo}, %{vcs}, %{nevra})
+        #[arg(long)]
+        queryformat: Option<String>,
+
+        // -- Filters --
+        /// Filter by architecture
+        #[arg(short, long)]
+        arch: Option<String>,
+
+        /// Filter by repository
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Show only the latest version per package name+arch
+        #[arg(long)]
+        latest: bool,
+
+        /// Maximum results
+        #[arg(long, default_value = "200")]
+        limit: usize,
+    },
+
     // ── Server & Debug ───────────────────────────────────────────────
     /// Run MCP (Model Context Protocol) server
     McpServer,
@@ -317,6 +378,56 @@ fn check_and_exec_cuda_version() -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── Repoquery helpers ────────────────────────────────────────────────
+
+/// Format a package using a custom query format string.
+/// Supports tags: %{name}, %{version}, %{release}, %{epoch}, %{arch},
+/// %{summary}, %{description}, %{license}, %{repo}, %{vcs}, %{nevra}.
+/// Also handles \n and \t escape sequences.
+fn format_querystring(fmt: &str, pkg: &Package) -> String {
+    fmt.replace("%{name}", &pkg.name)
+        .replace("%{version}", &pkg.version)
+        .replace("%{release}", &pkg.release)
+        .replace(
+            "%{epoch}",
+            &pkg.epoch.map(|e| e.to_string()).unwrap_or_default(),
+        )
+        .replace("%{arch}", &pkg.arch)
+        .replace("%{summary}", &pkg.summary)
+        .replace("%{description}", &pkg.description)
+        .replace("%{license}", pkg.license.as_deref().unwrap_or(""))
+        .replace("%{repo}", &pkg.repo)
+        .replace("%{vcs}", pkg.vcs.as_deref().unwrap_or(""))
+        .replace(
+            "%{nevra}",
+            &format!("{}-{}.{}", pkg.name, pkg.full_version(), pkg.arch),
+        )
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+}
+
+/// Filter packages to keep only the latest version per (name, arch) pair.
+/// Uses RPM version comparison via Package::Ord.
+fn filter_latest(packages: Vec<Package>) -> Vec<Package> {
+    let mut latest_map: HashMap<(String, String), Package> = HashMap::new();
+    for pkg in packages {
+        let key = (pkg.name.clone(), pkg.arch.clone());
+        match latest_map.entry(key) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(pkg);
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if pkg > *e.get() {
+                    e.insert(pkg);
+                }
+            }
+        }
+    }
+    let mut result: Vec<Package> = latest_map.into_values().collect();
+    result.sort();
+    result
 }
 
 fn main() -> Result<()> {
@@ -857,6 +968,176 @@ fn main() -> Result<()> {
                 }
             }
         },
+
+        Commands::Repoquery {
+            package,
+            whatprovides,
+            whatrequires,
+            file,
+            info,
+            list,
+            requires,
+            provides,
+            queryformat,
+            arch,
+            repo,
+            latest,
+            limit,
+        } => {
+            let _span = tracing::info_span!("repoquery").entered();
+            let api = api::RpmSearchApi::new(config)?;
+
+            // 1. Query phase: select packages
+            let mut packages = if let Some(ref file_path) = file {
+                // --file: find packages owning a file
+                let file_results = api.search_file(file_path)?;
+                file_results
+                    .into_iter()
+                    .map(|(pkg, _, _)| pkg)
+                    .filter(|pkg| arch.as_ref().is_none_or(|a| pkg.arch == *a))
+                    .filter(|pkg| repo.as_ref().is_none_or(|r| pkg.repo == *r))
+                    .collect::<Vec<_>>()
+            } else {
+                // Build FindFilter for name / whatprovides / whatrequires queries
+                let filter = FindFilter {
+                    name: package.clone(),
+                    provides: whatprovides.clone(),
+                    requires: whatrequires.clone(),
+                    arch: arch.clone(),
+                    repo: repo.clone(),
+                    limit,
+                    ..Default::default()
+                };
+
+                // If no query criteria given at all, list all packages (with arch/repo filter)
+                if filter.name.is_none()
+                    && filter.provides.is_none()
+                    && filter.requires.is_none()
+                    && filter.arch.is_none()
+                    && filter.repo.is_none()
+                {
+                    // general_search returns empty when no conditions, so use name wildcard
+                    let all_filter = FindFilter {
+                        name: Some("*".to_string()),
+                        arch: arch.clone(),
+                        repo: repo.clone(),
+                        limit,
+                        ..Default::default()
+                    };
+                    api.find(&all_filter)?
+                } else {
+                    api.find(&filter)?
+                }
+            };
+
+            // 2. Filter phase: --latest
+            if latest {
+                packages = filter_latest(packages);
+            }
+
+            if packages.is_empty() {
+                // Describe what was searched
+                if let Some(ref p) = package {
+                    println!("No packages found matching '{}'", p);
+                } else if let Some(ref cap) = whatprovides {
+                    println!("No packages found providing '{}'", cap);
+                } else if let Some(ref cap) = whatrequires {
+                    println!("No packages found requiring '{}'", cap);
+                } else if let Some(ref f) = file {
+                    println!("No packages found owning '{}'", f);
+                } else {
+                    println!("No packages found.");
+                }
+                return Ok(());
+            }
+
+            // 3. Output phase
+            if info {
+                // --info: detailed package information
+                for pkg in &packages {
+                    println!("Name        : {}", pkg.name);
+                    println!(
+                        "Epoch       : {}",
+                        pkg.epoch
+                            .map(|e| e.to_string())
+                            .unwrap_or_else(|| "0".to_string())
+                    );
+                    println!("Version     : {}", pkg.version);
+                    println!("Release     : {}", pkg.release);
+                    println!("Arch        : {}", pkg.arch);
+                    println!("Summary     : {}", pkg.summary);
+                    println!(
+                        "License     : {}",
+                        pkg.license.as_deref().unwrap_or("(none)")
+                    );
+                    println!("Repo        : {}", pkg.repo);
+                    if let Some(ref vcs) = pkg.vcs {
+                        println!("VCS         : {}", vcs);
+                    }
+                    println!("Description : {}", pkg.description);
+                    println!();
+                }
+            } else if requires {
+                // --requires: show requires for each package
+                for pkg in &packages {
+                    if packages.len() > 1 {
+                        println!("# {}-{}.{}", pkg.name, pkg.full_version(), pkg.arch);
+                    }
+                    for dep in &pkg.requires {
+                        if let (Some(flags), Some(ver)) = (&dep.flags, &dep.version) {
+                            println!("{} {} {}", dep.name, flags, ver);
+                        } else {
+                            println!("{}", dep.name);
+                        }
+                    }
+                }
+            } else if provides {
+                // --provides: show provides for each package
+                for pkg in &packages {
+                    if packages.len() > 1 {
+                        println!("# {}-{}.{}", pkg.name, pkg.full_version(), pkg.arch);
+                    }
+                    for dep in &pkg.provides {
+                        if let (Some(flags), Some(ver)) = (&dep.flags, &dep.version) {
+                            println!("{} {} {}", dep.name, flags, ver);
+                        } else {
+                            println!("{}", dep.name);
+                        }
+                    }
+                }
+            } else if list {
+                // --list: list files for each package
+                for pkg in &packages {
+                    if packages.len() > 1 {
+                        println!("# {}-{}.{}", pkg.name, pkg.full_version(), pkg.arch);
+                    }
+                    if pkg.pkg_id.is_some() {
+                        let files =
+                            api.list_package_files(&pkg.name, Some(&pkg.arch), Some(&pkg.repo))?;
+                        let mut found = false;
+                        for (_, file_list) in &files {
+                            for (path, _) in file_list {
+                                println!("{}", path);
+                                found = true;
+                            }
+                        }
+                        if !found {
+                            println!("  (no filelists indexed — run 'index-filelists' first)");
+                        }
+                    }
+                }
+            } else if let Some(ref fmt) = queryformat {
+                // --queryformat: custom format
+                for pkg in &packages {
+                    print!("{}", format_querystring(fmt, pkg));
+                }
+            } else {
+                // Default: NEVRA output
+                for pkg in &packages {
+                    println!("{}-{}.{}", pkg.name, pkg.full_version(), pkg.arch);
+                }
+            }
+        }
 
         Commands::DebugSearch { query, pkg_ids } => {
             let mut config = config;
