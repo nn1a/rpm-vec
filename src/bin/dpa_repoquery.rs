@@ -257,13 +257,16 @@ fn main() -> Result<()> {
     }
 
     // 5. Resolve repo names for filtering
-    let mut repos = cli.repo.clone();
-    let gbs_repos = gbs_config.get_repo_urls(cli.gbs_profile.as_deref())?;
-    for (name, _url) in gbs_repos {
-        if !repos.contains(&name) {
-            repos.push(name);
-        }
-    }
+    //    --repo overrides; otherwise default to all GBS repos
+    let repos = if cli.repo.is_empty() {
+        gbs_config
+            .get_repo_urls(cli.gbs_profile.as_deref())?
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    } else {
+        cli.repo.clone()
+    };
 
     // 6. Execute repoquery
     let db_path = config.db_path.clone();
@@ -281,20 +284,21 @@ fn main() -> Result<()> {
         limit: cli.limit,
     };
 
-    let has_any_condition = filter.name.is_some()
+    let has_query = filter.name.is_some()
         || filter.summary.is_some()
         || filter.description.is_some()
         || filter.provides.is_some()
         || filter.requires.is_some()
         || filter.file.is_some()
-        || filter.arch.is_some()
-        || !filter.repos.is_empty();
+        || filter.arch.is_some();
 
-    let mut packages = if has_any_condition {
+    let mut packages = if has_query {
         api.find(&filter)?
     } else {
+        // No query specified: list all packages in the filtered repos
         let all_filter = FindFilter {
             name: Some("*".to_string()),
+            repos,
             limit: cli.limit,
             ..Default::default()
         };

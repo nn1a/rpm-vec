@@ -4,7 +4,6 @@ use crate::sync::config::{RepoSyncConfig, RepoSyncState, SyncStatus};
 use crate::sync::state::SyncStateStore;
 use chrono::Utc;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
@@ -175,20 +174,14 @@ impl RepoSyncer {
     }
 
     fn download_file(&self, url: &str) -> Result<String> {
-        let response = reqwest::blocking::get(url)
-            .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?;
+        let body = ureq::get(url)
+            .call()
+            .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?
+            .into_body()
+            .read_to_string()
+            .map_err(|e| RpmSearchError::Fetch(format!("Failed to read response: {}", e)))?;
 
-        if !response.status().is_success() {
-            return Err(RpmSearchError::Fetch(format!(
-                "HTTP {} for {}",
-                response.status(),
-                url
-            )));
-        }
-
-        response
-            .text()
-            .map_err(|e| RpmSearchError::Fetch(format!("Failed to read response: {}", e)))
+        Ok(body)
     }
 
     fn download_to_file(&self, url: &str, repo_name: &str) -> Result<PathBuf> {
@@ -199,24 +192,14 @@ impl RepoSyncer {
 
         let dest_path = self.work_dir.join(format!("{}_{}", repo_name, filename));
 
-        let response = reqwest::blocking::get(url)
+        let response = ureq::get(url)
+            .call()
             .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?;
 
-        if !response.status().is_success() {
-            return Err(RpmSearchError::Fetch(format!(
-                "HTTP {} for {}",
-                response.status(),
-                url
-            )));
-        }
-
-        let bytes = response
-            .bytes()
-            .map_err(|e| RpmSearchError::Fetch(format!("Failed to read response: {}", e)))?;
-
+        let mut reader = response.into_body().into_reader();
         let mut file = fs::File::create(&dest_path).map_err(RpmSearchError::Io)?;
 
-        file.write_all(&bytes).map_err(RpmSearchError::Io)?;
+        std::io::copy(&mut reader, &mut file).map_err(RpmSearchError::Io)?;
 
         Ok(dest_path)
     }

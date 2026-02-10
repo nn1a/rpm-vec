@@ -41,11 +41,11 @@ clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Async / MCP server
-tokio = { version = "1.49", features = ["full"] }
+# Async / MCP server (optional - only needed for daemon/embedding binary)
+tokio = { version = "1.49", features = ["full"], optional = true }
 
 # Sync
-reqwest = { version = "0.13", features = ["blocking"] }
+ureq = "3"
 toml = { version = "0.9" }
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -67,6 +67,7 @@ embedding = [
     "dep:tokenizers",
     "dep:hf-hub",
     "dep:sqlite-vec",
+    "dep:tokio",
 ]
 
 # GPU acceleration (optional - will fallback to CPU if unavailable)
@@ -88,3 +89,8 @@ codegen-units = 1
 panic = "abort"
 debug = false
 strip = true
+
+# Size-optimized release profile: cargo build --profile release-small
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
