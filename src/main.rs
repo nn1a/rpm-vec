@@ -208,86 +208,6 @@ enum Commands {
         top_k: usize,
     },
 
-    /// Find packages by structured filters with wildcard support (* and ?)
-    Find {
-        /// Package name pattern (e.g., "lib*ssl*", "python?")
-        #[arg(short, long)]
-        name: Option<String>,
-
-        /// Summary keyword pattern
-        #[arg(short, long)]
-        summary: Option<String>,
-
-        /// Description keyword pattern
-        #[arg(long)]
-        description: Option<String>,
-
-        /// Provides capability pattern (e.g., "libssl.so*")
-        #[arg(short, long)]
-        provides: Option<String>,
-
-        /// Requires dependency pattern (e.g., "libcrypto*")
-        #[arg(long)]
-        requires: Option<String>,
-
-        /// File path pattern (e.g., "/usr/bin/python*", "*.so")
-        #[arg(short, long)]
-        file: Option<String>,
-
-        /// Filter by architecture
-        #[arg(short, long)]
-        arch: Option<String>,
-
-        /// Filter by repository (can be specified multiple times)
-        #[arg(long)]
-        repo: Vec<String>,
-
-        /// Use GBS configuration file to resolve repos from profile
-        #[arg(long, value_name = "PATH")]
-        gbs_conf: Option<PathBuf>,
-
-        /// GBS profile to use (default: from gbs.conf [general] section)
-        #[arg(long, requires = "gbs_conf")]
-        gbs_profile: Option<String>,
-
-        /// Number of results to return
-        #[arg(long, default_value = "50")]
-        limit: usize,
-    },
-
-    /// Search for packages that contain a specific file
-    SearchFile {
-        /// File path to search (e.g., /usr/bin/python3 or just "python3")
-        path: String,
-
-        /// Number of results to return
-        #[arg(short = 'n', long, default_value = "20")]
-        limit: usize,
-    },
-
-    /// List files provided by a package
-    ListFiles {
-        /// Package name
-        #[arg(short, long)]
-        package: String,
-
-        /// Filter by architecture
-        #[arg(short, long)]
-        arch: Option<String>,
-
-        /// Filter by repository (can be specified multiple times)
-        #[arg(short, long)]
-        repo: Vec<String>,
-
-        /// Use GBS configuration file to resolve repos from profile
-        #[arg(long, value_name = "PATH")]
-        gbs_conf: Option<PathBuf>,
-
-        /// GBS profile to use (default: from gbs.conf [general] section)
-        #[arg(long, requires = "gbs_conf")]
-        gbs_profile: Option<String>,
-    },
-
     // ── Repository management ────────────────────────────────────────
     /// Show database statistics
     Stats,
@@ -328,9 +248,18 @@ enum Commands {
         #[arg(long)]
         whatrequires: Option<String>,
 
-        /// Find packages that own a specific file
+        /// Find packages that own a specific file (e.g., "/usr/bin/python*", "*.so")
         #[arg(long)]
         file: Option<String>,
+
+        // -- Additional filters (from find) --
+        /// Summary keyword pattern
+        #[arg(short, long)]
+        summary: Option<String>,
+
+        /// Description keyword pattern
+        #[arg(long)]
+        description: Option<String>,
 
         // -- Output mode --
         /// Show detailed package information
@@ -750,128 +679,6 @@ fn main() -> Result<()> {
             info!(count, "Successfully indexed file entries");
         }
 
-        Commands::SearchFile { path, limit } => {
-            let _span = tracing::info_span!("search_file", path = %path).entered();
-            let api = api::RpmSearchApi::new(config)?;
-            let results = api.search_file(&path)?;
-
-            if results.is_empty() {
-                println!("No packages found providing '{}'", path);
-            } else {
-                println!("\nPackages providing '{}':\n", path);
-                for (i, (pkg, full_path, file_type)) in results.iter().enumerate().take(limit) {
-                    println!(
-                        "  {}. {}-{}.{} ({}) [{}] — {}",
-                        i + 1,
-                        pkg.name,
-                        pkg.full_version(),
-                        pkg.arch,
-                        pkg.repo,
-                        file_type,
-                        full_path,
-                    );
-                }
-                let total = results.len();
-                if total > limit {
-                    println!("\n  ... and {} more results", total - limit);
-                }
-            }
-        }
-
-        Commands::ListFiles {
-            package,
-            arch,
-            repo,
-            gbs_conf,
-            gbs_profile,
-        } => {
-            let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
-
-            let _span = tracing::info_span!("list_files", package = %package).entered();
-            let api = api::RpmSearchApi::new(config)?;
-            let results = api.list_package_files(&package, arch.as_deref(), &repos)?;
-
-            if results.is_empty() {
-                println!("No packages found matching '{}'", package);
-                println!("(Make sure filelists have been indexed with 'index-filelists')");
-            } else {
-                for (pkg, files) in &results {
-                    println!(
-                        "\n{}-{}.{} ({})",
-                        pkg.name,
-                        pkg.full_version(),
-                        pkg.arch,
-                        pkg.repo
-                    );
-                    if files.is_empty() {
-                        println!("  (no filelists indexed)");
-                    } else {
-                        for (path, ft) in files {
-                            let marker = match ft.as_str() {
-                                "dir" => "d",
-                                "ghost" => "g",
-                                _ => " ",
-                            };
-                            println!("  [{}] {}", marker, path);
-                        }
-                        println!("  Total: {} file(s)", files.len());
-                    }
-                }
-            }
-        }
-
-        Commands::Find {
-            name,
-            summary,
-            description,
-            provides,
-            requires,
-            file,
-            arch,
-            repo,
-            gbs_conf,
-            gbs_profile,
-            limit,
-        } => {
-            let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
-
-            let _span = tracing::info_span!("find").entered();
-            let api = api::RpmSearchApi::new(config)?;
-
-            let filter = FindFilter {
-                name,
-                summary,
-                description,
-                provides,
-                requires,
-                file,
-                arch,
-                repos,
-                limit,
-            };
-
-            let results = api.find(&filter)?;
-
-            if results.is_empty() {
-                println!("No packages found matching the given criteria.");
-            } else {
-                println!("\nFound {} package(s):\n", results.len());
-                for (i, pkg) in results.iter().enumerate() {
-                    println!(
-                        "  {}. {}-{}.{} ({})",
-                        i + 1,
-                        pkg.name,
-                        pkg.full_version(),
-                        pkg.arch,
-                        pkg.repo,
-                    );
-                    if !pkg.summary.is_empty() {
-                        println!("     {}", pkg.summary);
-                    }
-                }
-            }
-        }
-
         Commands::Stats => {
             let _span = tracing::info_span!("stats").entered();
             let api = api::RpmSearchApi::new(config)?;
@@ -1149,6 +956,8 @@ fn main() -> Result<()> {
             whatprovides,
             whatrequires,
             file,
+            summary,
+            description,
             info,
             list,
             requires,
@@ -1167,47 +976,38 @@ fn main() -> Result<()> {
             let db_path = config.db_path.clone();
             let api = api::RpmSearchApi::new(config)?;
 
-            // 1. Query phase: select packages
-            let mut packages = if let Some(ref file_path) = file {
-                // --file: find packages owning a file
-                let file_results = api.search_file(file_path)?;
-                file_results
-                    .into_iter()
-                    .map(|(pkg, _, _)| pkg)
-                    .filter(|pkg| arch.as_ref().is_none_or(|a| pkg.arch == *a))
-                    .filter(|pkg| repos.is_empty() || repos.contains(&pkg.repo))
-                    .collect::<Vec<_>>()
+            // 1. Query phase: build FindFilter from all criteria
+            let filter = FindFilter {
+                name: package.clone(),
+                summary,
+                description,
+                provides: whatprovides.clone(),
+                requires: whatrequires.clone(),
+                file: file.clone(),
+                arch: arch.clone(),
+                repos: repos.clone(),
+                limit,
+            };
+
+            let has_any_condition = filter.name.is_some()
+                || filter.summary.is_some()
+                || filter.description.is_some()
+                || filter.provides.is_some()
+                || filter.requires.is_some()
+                || filter.file.is_some()
+                || filter.arch.is_some()
+                || !filter.repos.is_empty();
+
+            let mut packages = if has_any_condition {
+                api.find(&filter)?
             } else {
-                // Build FindFilter for name / whatprovides / whatrequires queries
-                let filter = FindFilter {
-                    name: package.clone(),
-                    provides: whatprovides.clone(),
-                    requires: whatrequires.clone(),
-                    arch: arch.clone(),
-                    repos: repos.clone(),
+                // No criteria given at all: list all packages
+                let all_filter = FindFilter {
+                    name: Some("*".to_string()),
                     limit,
                     ..Default::default()
                 };
-
-                // If no query criteria given at all, list all packages (with arch/repo filter)
-                if filter.name.is_none()
-                    && filter.provides.is_none()
-                    && filter.requires.is_none()
-                    && filter.arch.is_none()
-                    && filter.repos.is_empty()
-                {
-                    // general_search returns empty when no conditions, so use name wildcard
-                    let all_filter = FindFilter {
-                        name: Some("*".to_string()),
-                        arch: arch.clone(),
-                        repos: repos.clone(),
-                        limit,
-                        ..Default::default()
-                    };
-                    api.find(&all_filter)?
-                } else {
-                    api.find(&filter)?
-                }
+                api.find(&all_filter)?
             };
 
             // 2. Filter phase: --latest
