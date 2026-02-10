@@ -1,7 +1,7 @@
 use crate::error::Result;
 use rusqlite::Connection;
 
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 pub struct Schema;
 
@@ -30,6 +30,7 @@ impl Schema {
                 description TEXT NOT NULL,
                 license     TEXT,
                 vcs         TEXT,
+                location_href TEXT,
                 repo        TEXT NOT NULL
             )",
             [],
@@ -158,6 +159,30 @@ impl Schema {
                     "DROP TABLE IF EXISTS files;
                      DROP INDEX IF EXISTS idx_files_pkg_id;",
                 )?;
+            }
+            // v3 -> v4: Add location_href to packages, base_url to repo_sync_state
+            if current < 4 {
+                // Add location_href column (NULL for existing rows)
+                let has_location = conn
+                    .prepare("SELECT location_href FROM packages LIMIT 0")
+                    .is_ok();
+                if !has_location {
+                    conn.execute_batch("ALTER TABLE packages ADD COLUMN location_href TEXT;")?;
+                }
+                // Add base_url to repo_sync_state if that table exists
+                let has_base_url = conn
+                    .prepare("SELECT base_url FROM repo_sync_state LIMIT 0")
+                    .is_ok();
+                if !has_base_url {
+                    let has_table = conn
+                        .prepare("SELECT 1 FROM repo_sync_state LIMIT 0")
+                        .is_ok();
+                    if has_table {
+                        conn.execute_batch(
+                            "ALTER TABLE repo_sync_state ADD COLUMN base_url TEXT;",
+                        )?;
+                    }
+                }
             }
         }
         Ok(())

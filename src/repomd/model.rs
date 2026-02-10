@@ -14,6 +14,7 @@ pub struct RpmPackage {
     pub vcs: Option<String>,
     pub packager: Option<String>,
     pub url: Option<String>,
+    pub location_href: Option<String>,
     pub requires: Vec<RpmDependency>,
     pub provides: Vec<RpmDependency>,
     pub files: Vec<String>,

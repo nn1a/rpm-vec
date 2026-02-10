@@ -125,6 +125,10 @@ enum Commands {
         /// Path to filelists.xml (optional, will index file lists after primary.xml)
         #[arg(long)]
         filelists: Option<PathBuf>,
+
+        /// Base URL of the repository (for generating RPM download URLs)
+        #[arg(long)]
+        base_url: Option<String>,
     },
 
     /// Index filelists from filelists.xml file (run after 'index')
@@ -338,7 +342,8 @@ enum Commands {
         provides: bool,
 
         /// Custom output format (supports %{name}, %{version}, %{release}, %{epoch}, %{arch},
-        /// %{summary}, %{description}, %{license}, %{repo}, %{vcs}, %{nevra})
+        /// %{summary}, %{description}, %{license}, %{repo}, %{vcs}, %{nevra},
+        /// %{location}, %{download_url})
         #[arg(long)]
         queryformat: Option<String>,
 
@@ -441,9 +446,10 @@ fn check_and_exec_cuda_version() -> Result<()> {
 
 /// Format a package using a custom query format string.
 /// Supports tags: %{name}, %{version}, %{release}, %{epoch}, %{arch},
-/// %{summary}, %{description}, %{license}, %{repo}, %{vcs}, %{nevra}.
+/// %{summary}, %{description}, %{license}, %{repo}, %{vcs}, %{nevra},
+/// %{location}, %{download_url}.
 /// Also handles \n and \t escape sequences.
-fn format_querystring(fmt: &str, pkg: &Package) -> String {
+fn format_querystring(fmt: &str, pkg: &Package, download_url: Option<&str>) -> String {
     fmt.replace("%{name}", &pkg.name)
         .replace("%{version}", &pkg.version)
         .replace("%{release}", &pkg.release)
@@ -457,6 +463,8 @@ fn format_querystring(fmt: &str, pkg: &Package) -> String {
         .replace("%{license}", pkg.license.as_deref().unwrap_or(""))
         .replace("%{repo}", &pkg.repo)
         .replace("%{vcs}", pkg.vcs.as_deref().unwrap_or(""))
+        .replace("%{location}", pkg.location_href.as_deref().unwrap_or(""))
+        .replace("%{download_url}", download_url.unwrap_or(""))
         .replace(
             "%{nevra}",
             &format!("{}-{}.{}", pkg.name, pkg.full_version(), pkg.arch),
@@ -485,6 +493,18 @@ fn filter_latest(packages: Vec<Package>) -> Vec<Package> {
     let mut result: Vec<Package> = latest_map.into_values().collect();
     result.sort();
     result
+}
+
+/// Build the full RPM download URL for a package.
+/// Combines the repo base_url (from sync state) with the package's location_href.
+fn build_download_url(state_store: &sync::SyncStateStore, pkg: &Package) -> Option<String> {
+    let location = pkg.location_href.as_deref()?;
+    let base_url = state_store.get_base_url(&pkg.repo).ok()??;
+    Some(format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        location.trim_start_matches('/')
+    ))
 }
 
 /// Resolve repository filter from --repo flags and --gbs-conf/--gbs-profile options.
@@ -560,6 +580,7 @@ fn main() -> Result<()> {
             repo,
             update,
             filelists,
+            base_url,
         } => {
             let _span = tracing::info_span!("index", repo = %repo, file = %file.display(), update)
                 .entered();
@@ -568,6 +589,7 @@ fn main() -> Result<()> {
             } else {
                 info!("Indexing repository");
             }
+            let db_path = config.db_path.clone();
             let mut api = api::RpmSearchApi::new(config)?;
             let count = api.index_repository(&file, &repo, update)?;
             if update {
@@ -581,6 +603,14 @@ fn main() -> Result<()> {
                 info!("Indexing filelists");
                 let fl_count = api.index_filelists(&filelists_path, &repo)?;
                 info!(fl_count, "Successfully indexed file entries");
+            }
+
+            // Save base_url for download URL generation
+            if let Some(ref url) = base_url {
+                let conn = rusqlite::Connection::open(&db_path)?;
+                let state_store = sync::SyncStateStore::new(conn)?;
+                state_store.set_base_url(&repo, url)?;
+                info!(base_url = %url, "Saved repository base URL");
             }
         }
 
@@ -646,6 +676,7 @@ fn main() -> Result<()> {
 
             let mut config = config;
             config.top_k = top_k;
+            let db_path = config.db_path.clone();
 
             let api = api::RpmSearchApi::new(config)?;
             let filters = SearchFilters {
@@ -659,6 +690,12 @@ fn main() -> Result<()> {
             let result = api.search_with_scores(&query, filters)?;
 
             info!(count = result.packages.len(), "Search completed");
+
+            // Open state store for download URL resolution
+            let state_store = {
+                let conn = rusqlite::Connection::open(&db_path)?;
+                sync::SyncStateStore::new(conn)?
+            };
 
             // Output results to stdout (not logged)
             println!("\nFound {} packages:\n", result.packages.len());
@@ -679,6 +716,9 @@ fn main() -> Result<()> {
                 }
                 if let Some(ref vcs) = pkg.vcs {
                     println!("   VCS: {}", vcs);
+                }
+                if let Some(url) = build_download_url(&state_store, pkg) {
+                    println!("   Download: {}", url);
                 }
                 if !pkg.description.is_empty() {
                     let desc = if pkg.description.len() > 200 {
@@ -1107,6 +1147,7 @@ fn main() -> Result<()> {
             let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
 
             let _span = tracing::info_span!("repoquery").entered();
+            let db_path = config.db_path.clone();
             let api = api::RpmSearchApi::new(config)?;
 
             // 1. Query phase: select packages
@@ -1174,6 +1215,12 @@ fn main() -> Result<()> {
             }
 
             // 3. Output phase
+            // Open state store for download URL resolution
+            let state_store = {
+                let conn = rusqlite::Connection::open(&db_path)?;
+                sync::SyncStateStore::new(conn)?
+            };
+
             if info {
                 // --info: detailed package information
                 for pkg in &packages {
@@ -1195,6 +1242,12 @@ fn main() -> Result<()> {
                     println!("Repo        : {}", pkg.repo);
                     if let Some(ref vcs) = pkg.vcs {
                         println!("VCS         : {}", vcs);
+                    }
+                    if let Some(ref loc) = pkg.location_href {
+                        println!("Location    : {}", loc);
+                    }
+                    if let Some(url) = build_download_url(&state_store, pkg) {
+                        println!("URL         : {}", url);
                     }
                     println!("Description : {}", pkg.description);
                     println!();
@@ -1252,7 +1305,8 @@ fn main() -> Result<()> {
             } else if let Some(ref fmt) = queryformat {
                 // --queryformat: custom format
                 for pkg in &packages {
-                    print!("{}", format_querystring(fmt, pkg));
+                    let url = build_download_url(&state_store, pkg);
+                    print!("{}", format_querystring(fmt, pkg, url.as_deref()));
                 }
             } else {
                 // Default: NEVRA output

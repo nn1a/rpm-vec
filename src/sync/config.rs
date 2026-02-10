@@ -103,6 +103,7 @@ pub struct RepoSyncState {
     pub last_checksum: Option<String>,
     pub last_status: SyncStatus,
     pub last_error: Option<String>,
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

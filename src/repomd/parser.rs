@@ -46,6 +46,7 @@ impl PrimaryXmlParser {
                                 vcs: None,
                                 packager: None,
                                 url: None,
+                                location_href: None,
                                 requires: Vec::new(),
                                 provides: Vec::new(),
                                 files: Vec::new(),
@@ -88,6 +89,16 @@ impl PrimaryXmlParser {
                         }
                         "rpm:license" => {
                             current_text.clear();
+                        }
+                        "location" => {
+                            if let Some(pkg) = current_package.as_mut() {
+                                for attr in e.attributes().flatten() {
+                                    if attr.key.as_ref() == b"href" {
+                                        let value = String::from_utf8_lossy(&attr.value);
+                                        pkg.location_href = Some(value.to_string());
+                                    }
+                                }
+                            }
                         }
                         "rpm:requires" => {
                             dep_section = DepSection::Requires;
@@ -215,6 +226,7 @@ mod tests {
             <name>test-package</name>
             <arch>x86_64</arch>
             <version epoch="0" ver="1.0.0" rel="1"/>
+            <location href="x86_64/test-package-1.0.0-1.x86_64.rpm"/>
             <summary>Test package</summary>
             <description>A test package for unit testing</description>
           </package>
@@ -226,6 +238,10 @@ mod tests {
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].name, "test-package");
         assert_eq!(packages[0].version, "1.0.0");
+        assert_eq!(
+            packages[0].location_href.as_deref(),
+            Some("x86_64/test-package-1.0.0-1.x86_64.rpm")
+        );
     }
 
     #[test]

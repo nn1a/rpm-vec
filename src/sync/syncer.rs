@@ -40,7 +40,11 @@ impl RepoSyncer {
                 last_checksum: None,
                 last_status: SyncStatus::Never,
                 last_error: None,
+                base_url: None,
             });
+
+        // Always update base_url from config
+        state.base_url = Some(config.base_url.clone());
 
         state.last_status = SyncStatus::InProgress;
         self.state_store.update_state(&state)?;

@@ -24,7 +24,8 @@ impl SyncStateStore {
                 last_sync TEXT,
                 last_checksum TEXT,
                 last_status TEXT NOT NULL,
-                last_error TEXT
+                last_error TEXT,
+                base_url TEXT
             )",
             [],
         )?;
@@ -36,8 +37,8 @@ impl SyncStateStore {
     /// Get sync state for a repository
     pub fn get_state(&self, repo_name: &str) -> Result<Option<RepoSyncState>> {
         let mut stmt = self.conn.prepare(
-            "SELECT repo_name, last_sync, last_checksum, last_status, last_error 
-             FROM repo_sync_state 
+            "SELECT repo_name, last_sync, last_checksum, last_status, last_error, base_url
+             FROM repo_sync_state
              WHERE repo_name = ?",
         )?;
 
@@ -62,6 +63,7 @@ impl SyncStateStore {
                 last_checksum: row.get(2)?,
                 last_status,
                 last_error: row.get(4)?,
+                base_url: row.get(5)?,
             })
         });
 
@@ -77,15 +79,16 @@ impl SyncStateStore {
         let last_sync_str = state.last_sync.map(|dt| dt.to_rfc3339());
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO repo_sync_state 
-             (repo_name, last_sync, last_checksum, last_status, last_error) 
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO repo_sync_state
+             (repo_name, last_sync, last_checksum, last_status, last_error, base_url)
+             VALUES (?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 &state.repo_name,
                 last_sync_str,
                 &state.last_checksum,
                 state.last_status.to_string(),
                 &state.last_error,
+                &state.base_url,
             ],
         )?;
 
@@ -100,8 +103,8 @@ impl SyncStateStore {
     /// List all repository sync states
     pub fn list_states(&self) -> Result<Vec<RepoSyncState>> {
         let mut stmt = self.conn.prepare(
-            "SELECT repo_name, last_sync, last_checksum, last_status, last_error 
-             FROM repo_sync_state 
+            "SELECT repo_name, last_sync, last_checksum, last_status, last_error, base_url
+             FROM repo_sync_state
              ORDER BY repo_name",
         )?;
 
@@ -127,11 +130,41 @@ impl SyncStateStore {
                     last_checksum: row.get(2)?,
                     last_status,
                     last_error: row.get(4)?,
+                    base_url: row.get(5)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(states)
+    }
+
+    /// Get base URL for a repository
+    pub fn get_base_url(&self, repo_name: &str) -> Result<Option<String>> {
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT base_url FROM repo_sync_state WHERE repo_name = ?",
+                [repo_name],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        Ok(result)
+    }
+
+    /// Set base URL for a repository (used by manual index --base-url)
+    pub fn set_base_url(&self, repo_name: &str, base_url: &str) -> Result<()> {
+        // Ensure the row exists
+        self.conn.execute(
+            "INSERT OR IGNORE INTO repo_sync_state (repo_name, last_status) VALUES (?, 'never')",
+            [repo_name],
+        )?;
+        self.conn.execute(
+            "UPDATE repo_sync_state SET base_url = ? WHERE repo_name = ?",
+            rusqlite::params![base_url, repo_name],
+        )?;
+        info!(repo = %repo_name, base_url = %base_url, "Set base URL");
+        Ok(())
     }
 
     /// Delete sync state for a repository
