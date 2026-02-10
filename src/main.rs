@@ -1,23 +1,23 @@
-mod api;
-mod config;
-mod embedding;
-mod error;
-mod gbs;
-mod mcp;
-mod normalize;
-mod repomd;
-mod search;
-mod storage;
-mod sync;
+use rpm_repo_search::api;
+use rpm_repo_search::config::Config;
+#[cfg(feature = "embedding")]
+use rpm_repo_search::config::ModelType;
+#[cfg(feature = "embedding")]
+use rpm_repo_search::embedding;
+use rpm_repo_search::error;
+use rpm_repo_search::error::Result;
+use rpm_repo_search::gbs;
+#[cfg(feature = "embedding")]
+use rpm_repo_search::mcp;
+use rpm_repo_search::normalize::Package;
+#[cfg(feature = "embedding")]
+use rpm_repo_search::search::SearchFilters;
+use rpm_repo_search::storage::FindFilter;
+use rpm_repo_search::sync;
 
 use clap::{Parser, Subcommand};
-use config::{Config, ModelType};
-use error::Result;
-use normalize::Package;
-use search::SearchFilters;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use storage::FindFilter;
 use tracing::info;
 
 #[derive(Parser)]
@@ -151,6 +151,7 @@ enum Commands {
     },
 
     /// Build embeddings for indexed packages
+    #[cfg(feature = "embedding")]
     BuildEmbeddings {
         /// Embedding model type (minilm = English, e5-multilingual = 100 languages)
         #[arg(long, value_enum, default_value = "minilm")]
@@ -175,6 +176,7 @@ enum Commands {
 
     // ── Search ───────────────────────────────────────────────────────
     /// Search packages using natural language (semantic vector search)
+    #[cfg(feature = "embedding")]
     Search {
         /// Natural language search query (e.g., 'compression library', 'image processing tool')
         query: String,
@@ -227,6 +229,7 @@ enum Commands {
 
     // ── Model management ────────────────────────────────────────────
     /// Download embedding model from HuggingFace Hub
+    #[cfg(feature = "embedding")]
     DownloadModel {
         /// Model type to download
         #[arg(long, value_enum, default_value = "minilm")]
@@ -312,9 +315,11 @@ enum Commands {
 
     // ── Server & Debug ───────────────────────────────────────────────
     /// Run MCP (Model Context Protocol) server
+    #[cfg(feature = "embedding")]
     McpServer,
 
     /// Debug search - diagnose embedding quality
+    #[cfg(feature = "embedding")]
     DebugSearch {
         /// Search query
         query: String,
@@ -326,7 +331,7 @@ enum Commands {
 }
 
 /// Check if CUDA is available and exec CUDA version of the binary if it is
-#[cfg(not(feature = "cuda"))]
+#[cfg(all(not(feature = "cuda"), feature = "embedding"))]
 fn check_and_exec_cuda_version() -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::Command;
@@ -465,11 +470,18 @@ fn resolve_repos(
 }
 
 fn main() -> Result<()> {
+    // Restore default SIGPIPE handling so piping to head/grep etc. exits cleanly
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     // Check if CUDA is available and exec CUDA version if it is
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(all(not(feature = "cuda"), feature = "embedding"))]
     check_and_exec_cuda_version()?;
 
-    // Register sqlite-vec extension for all connections (when feature enabled)
+    // Register sqlite-vec extension for all connections (when embedding feature enabled)
+    #[cfg(feature = "embedding")]
     unsafe {
         use rusqlite::ffi::sqlite3_auto_extension;
         sqlite3_auto_extension(Some(std::mem::transmute::<
@@ -484,7 +496,10 @@ fn main() -> Result<()> {
 
     // Initialize logging with environment variable support (RUST_LOG)
     // MCP server mode: logs MUST go to stderr since stdout is the JSON-RPC transport
+    #[cfg(feature = "embedding")]
     let is_mcp_mode = std::env::args().any(|a| a == "mcp-server");
+    #[cfg(not(feature = "embedding"))]
+    let is_mcp_mode = false;
 
     if is_mcp_mode {
         // MCP mode: write logs to stderr to avoid polluting the JSON-RPC channel on stdout
@@ -551,6 +566,7 @@ fn main() -> Result<()> {
             }
         }
 
+        #[cfg(feature = "embedding")]
         Commands::BuildEmbeddings {
             model_type,
             model,
@@ -591,6 +607,7 @@ fn main() -> Result<()> {
             info!(count, "Successfully built embeddings");
         }
 
+        #[cfg(feature = "embedding")]
         Commands::Search {
             query,
             arch,
@@ -751,6 +768,7 @@ fn main() -> Result<()> {
             }
         },
 
+        #[cfg(feature = "embedding")]
         Commands::DownloadModel { model_type } => {
             let _span = tracing::info_span!("download_model", model_type = %model_type).entered();
             info!("Downloading model");
@@ -771,6 +789,7 @@ fn main() -> Result<()> {
             println!("  Tokenizer: {}", files.tokenizer.display());
         }
 
+        #[cfg(feature = "embedding")]
         Commands::McpServer => {
             let _span = tracing::info_span!("mcp_server").entered();
             info!("Starting MCP server");
@@ -848,6 +867,7 @@ fn main() -> Result<()> {
                 }
 
                 // Automatically build embeddings incrementally after sync
+                #[cfg(feature = "embedding")]
                 if !no_embedding {
                     println!("\n🔨 Building embeddings for new packages...");
                     let model_files =
@@ -863,8 +883,14 @@ fn main() -> Result<()> {
                     } else {
                         println!("✅ All embeddings up to date");
                     }
-                } else {
+                }
+                #[cfg(feature = "embedding")]
+                if no_embedding {
                     println!("\n⏭ Embedding generation skipped (--no-embedding)");
+                }
+                #[cfg(not(feature = "embedding"))]
+                {
+                    let _ = no_embedding;
                 }
             }
 
@@ -1133,6 +1159,7 @@ fn main() -> Result<()> {
             }
         }
 
+        #[cfg(feature = "embedding")]
         Commands::DebugSearch { query, pkg_ids } => {
             let mut config = config;
             config.top_k = 10;
@@ -1140,7 +1167,7 @@ fn main() -> Result<()> {
             // Auto-detect model type from DB metadata
             let db_model_type = {
                 let conn = rusqlite::Connection::open(&config.db_path)?;
-                let vector_store = storage::VectorStore::new(conn)?;
+                let vector_store = rpm_repo_search::storage::VectorStore::new(conn)?;
                 vector_store.get_embedding_model_type()?
             };
             if let Some(ref db_type_str) = db_model_type {

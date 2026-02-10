@@ -143,6 +143,7 @@ impl SyncScheduler {
             let result = syncer.sync_repository(&repo_config)?;
 
             // Build embeddings incrementally for new packages
+            #[cfg(feature = "embedding")]
             if embedding_enabled && result.changed && result.packages_synced > 0 {
                 info!(
                     repo = %repo_config.name,
@@ -161,6 +162,11 @@ impl SyncScheduler {
                     new_embeddings = count,
                     "Incremental embedding build completed"
                 );
+            }
+            #[cfg(not(feature = "embedding"))]
+            {
+                let _ = embedding_enabled;
+                let _ = &result;
             }
 
             Ok(())

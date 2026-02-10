@@ -1,4 +1,5 @@
 use crate::config::Config;
+#[cfg(feature = "embedding")]
 use crate::embedding::Embedder;
 use crate::error::Result;
 use crate::normalize::Package;
@@ -6,15 +7,21 @@ use crate::repomd::fetch::RepoFetcher;
 use crate::repomd::filelists_parser::FilelistsXmlParser;
 use crate::repomd::model::RpmPackage;
 use crate::repomd::parser::PrimaryXmlParser;
+#[cfg(feature = "embedding")]
 use crate::search::{
     QueryPlanner, SearchFilters, SearchQuery, SearchResult, SemanticSearch, StructuredSearch,
 };
-use crate::storage::{FindFilter, PackageStore, VectorStore};
+use crate::storage::FindFilter;
+use crate::storage::PackageStore;
+#[cfg(feature = "embedding")]
+use crate::storage::VectorStore;
+#[cfg(feature = "embedding")]
 use rusqlite::Connection;
 use std::path::Path;
 use tracing::{debug, info, instrument, warn};
 
 pub struct RpmSearchApi {
+    #[cfg_attr(not(feature = "embedding"), allow(dead_code))]
     config: Config,
     package_store: PackageStore,
 }
@@ -169,6 +176,7 @@ impl RpmSearchApi {
     ///
     /// Model mismatch protection: if the DB was built with a different model type,
     /// incremental builds are rejected (must use `--rebuild`).
+    #[cfg(feature = "embedding")]
     #[instrument(skip(self, embedder), fields(verbose, rebuild))]
     pub fn build_embeddings(
         &self,
@@ -323,6 +331,7 @@ impl RpmSearchApi {
     }
 
     /// Search packages
+    #[cfg(feature = "embedding")]
     #[instrument(skip(self, query, filters), fields(query = %query, top_k = self.config.top_k))]
     pub fn search(&self, query: &str, filters: SearchFilters) -> Result<Vec<Package>> {
         let result = self.search_with_scores(query, filters)?;
@@ -333,6 +342,7 @@ impl RpmSearchApi {
     ///
     /// Auto-detects the embedding model type from DB metadata if available,
     /// falling back to the config default.
+    #[cfg(feature = "embedding")]
     #[instrument(skip(self, query, filters), fields(query = %query, top_k = self.config.top_k))]
     pub fn search_with_scores(&self, query: &str, filters: SearchFilters) -> Result<SearchResult> {
         debug!("Creating embedder and vector store");

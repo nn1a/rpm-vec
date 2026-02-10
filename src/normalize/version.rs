@@ -21,7 +21,7 @@
 /// # Examples
 ///
 /// ```
-/// use rpm_repo_search::RpmVersion;
+/// use rpm_repo_search::normalize::version::RpmVersion;
 /// use std::cmp::Ordering;
 ///
 /// let v1 = RpmVersion::new(None, "1.0".to_string(), "1".to_string());

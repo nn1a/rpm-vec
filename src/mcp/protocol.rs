@@ -145,6 +145,12 @@ pub struct ServerInfo {
     pub version: String,
 }
 
+impl Default for InitializeResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InitializeResult {
     pub fn new() -> Self {
         Self {
