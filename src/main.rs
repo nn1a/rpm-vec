@@ -62,6 +62,10 @@ enum SyncCommands {
         /// GBS profile to use (default: from gbs.conf [general] section)
         #[arg(long, requires = "gbs_conf")]
         gbs_profile: Option<String>,
+
+        /// Skip automatic embedding generation after sync
+        #[arg(long)]
+        no_embedding: bool,
     },
 
     /// Run sync daemon (continuous background syncing)
@@ -77,6 +81,10 @@ enum SyncCommands {
         /// GBS profile to use (default: from gbs.conf [general] section)
         #[arg(long, requires = "gbs_conf")]
         gbs_profile: Option<String>,
+
+        /// Skip automatic embedding generation after sync
+        #[arg(long)]
+        no_embedding: bool,
     },
 
     /// Show sync status for all repositories
@@ -994,6 +1002,7 @@ fn main() -> Result<()> {
                 config: sync_config_path,
                 gbs_conf,
                 gbs_profile,
+                no_embedding,
             } => {
                 let sync_config = if let Some(gbs_path) = gbs_conf {
                     let _span =
@@ -1032,17 +1041,23 @@ fn main() -> Result<()> {
                 }
 
                 // Automatically build embeddings incrementally after sync
-                println!("\n🔨 Building embeddings for new packages...");
-                let model_files =
-                    embedding::hub::resolve_model_files(&config.model_type, None, None)?;
-                let api = api::RpmSearchApi::new(config.clone())?;
-                let embedder =
-                    embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
-                let count = api.build_embeddings(&embedder, false, false)?;
-                if count > 0 {
-                    println!("✅ Built embeddings for {} new packages", count);
+                if !no_embedding {
+                    println!("\n🔨 Building embeddings for new packages...");
+                    let model_files =
+                        embedding::hub::resolve_model_files(&config.model_type, None, None)?;
+                    let api = api::RpmSearchApi::new(config.clone())?;
+                    let embedder = embedding::Embedder::from_model_files(
+                        &model_files,
+                        config.model_type.clone(),
+                    )?;
+                    let count = api.build_embeddings(&embedder, false, false)?;
+                    if count > 0 {
+                        println!("✅ Built embeddings for {} new packages", count);
+                    } else {
+                        println!("✅ All embeddings up to date");
+                    }
                 } else {
-                    println!("✅ All embeddings up to date");
+                    println!("\n⏭ Embedding generation skipped (--no-embedding)");
                 }
             }
 
@@ -1050,6 +1065,7 @@ fn main() -> Result<()> {
                 config: sync_config_path,
                 gbs_conf,
                 gbs_profile,
+                no_embedding,
             } => {
                 let sync_config = if let Some(gbs_path) = gbs_conf {
                     let _span = tracing::info_span!("sync_daemon", gbs_conf = %gbs_path.display())
@@ -1064,7 +1080,8 @@ fn main() -> Result<()> {
                     info!("Starting sync daemon");
                     sync::SyncConfig::from_file(&config_path)?
                 };
-                let scheduler = sync::SyncScheduler::new(sync_config, config);
+                let mut scheduler = sync::SyncScheduler::new(sync_config, config);
+                scheduler.set_embedding_enabled(!no_embedding);
 
                 println!("Starting sync daemon...");
                 println!("Press Ctrl+C to stop");

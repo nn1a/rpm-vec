@@ -12,6 +12,7 @@ use tracing::{error, info, warn};
 pub struct SyncScheduler {
     sync_config: SyncConfig,
     db_config: Config,
+    embedding_enabled: bool,
 }
 
 impl SyncScheduler {
@@ -19,7 +20,13 @@ impl SyncScheduler {
         Self {
             sync_config,
             db_config,
+            embedding_enabled: true,
         }
+    }
+
+    /// Enable or disable automatic embedding generation after sync
+    pub fn set_embedding_enabled(&mut self, enabled: bool) {
+        self.embedding_enabled = enabled;
     }
 
     /// Run scheduler in daemon mode
@@ -28,6 +35,8 @@ impl SyncScheduler {
 
         // Create interval tasks for each repository
         let mut tasks = Vec::new();
+
+        let embedding_enabled = self.embedding_enabled;
 
         for repo_config in &self.sync_config.repositories {
             if !repo_config.enabled {
@@ -56,7 +65,10 @@ impl SyncScheduler {
                     info!(repo = %repo_config.name, "Sync tick triggered");
 
                     // Perform sync
-                    if let Err(e) = Self::perform_sync(&repo_config, &db_config, &work_dir).await {
+                    if let Err(e) =
+                        Self::perform_sync(&repo_config, &db_config, &work_dir, embedding_enabled)
+                            .await
+                    {
                         error!(repo = %repo_config.name, error = %e, "Sync failed");
                     }
                 }
@@ -92,8 +104,13 @@ impl SyncScheduler {
                 continue;
             }
 
-            let result =
-                Self::perform_sync(repo_config, &self.db_config, &self.sync_config.work_dir).await;
+            let result = Self::perform_sync(
+                repo_config,
+                &self.db_config,
+                &self.sync_config.work_dir,
+                false, // sync_once: embedding is handled by the caller (main.rs)
+            )
+            .await;
 
             let repo_name = repo_config.name.clone();
             results.insert(repo_name, result);
@@ -106,6 +123,7 @@ impl SyncScheduler {
         repo_config: &crate::sync::config::RepoSyncConfig,
         db_config: &Config,
         work_dir: &std::path::Path,
+        embedding_enabled: bool,
     ) -> Result<()> {
         // Run sync in blocking context (since RpmSearchApi is synchronous)
         let repo_config = repo_config.clone();
@@ -125,7 +143,7 @@ impl SyncScheduler {
             let result = syncer.sync_repository(&repo_config)?;
 
             // Build embeddings incrementally for new packages
-            if result.changed && result.packages_synced > 0 {
+            if embedding_enabled && result.changed && result.packages_synced > 0 {
                 info!(
                     repo = %repo_config.name,
                     packages_synced = result.packages_synced,
