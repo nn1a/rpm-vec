@@ -505,7 +505,7 @@ impl RpmSearchApi {
         &self,
         name: &str,
         arch: Option<&str>,
-        repo: Option<&str>,
+        repos: &[String],
     ) -> Result<Vec<(Package, Vec<(String, String)>)>> {
         let packages = self.package_store.search_by_name(name)?;
 
@@ -516,10 +516,8 @@ impl RpmSearchApi {
                     continue;
                 }
             }
-            if let Some(r) = repo {
-                if pkg.repo != r {
-                    continue;
-                }
+            if !repos.is_empty() && !repos.contains(&pkg.repo) {
+                continue;
             }
 
             if let Some(id) = pkg.pkg_id {

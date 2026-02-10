@@ -177,18 +177,22 @@ impl McpServer {
             .ok_or_else(|| RpmSearchError::Config("Missing 'query' parameter".to_string()))?;
 
         let arch = args.get("arch").and_then(|v| v.as_str()).map(String::from);
-        let repo = args.get("repo").and_then(|v| v.as_str()).map(String::from);
+        let repos: Vec<String> = args
+            .get("repo")
+            .and_then(|v| v.as_str())
+            .map(|r| vec![r.to_string()])
+            .unwrap_or_default();
         let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
         info!(
-            "Searching packages: query='{}', arch={:?}, repo={:?}, top_k={}",
-            query, arch, repo, top_k
+            "Searching packages: query='{}', arch={:?}, repos={:?}, top_k={}",
+            query, arch, repos, top_k
         );
 
         let filters = SearchFilters {
             name: None,
             arch,
-            repo,
+            repos,
             not_requiring: None,
             providing: None,
         };
@@ -227,22 +231,26 @@ impl McpServer {
             .ok_or_else(|| RpmSearchError::Config("Missing 'name' parameter".to_string()))?;
 
         let arch = args.get("arch").and_then(|v| v.as_str()).map(String::from);
-        let repo = args.get("repo").and_then(|v| v.as_str()).map(String::from);
+        let repos: Vec<String> = args
+            .get("repo")
+            .and_then(|v| v.as_str())
+            .map(|r| vec![r.to_string()])
+            .unwrap_or_default();
         let include_files = args
             .get("include_files")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
         info!(
-            "Getting package info: name='{}', arch={:?}, repo={:?}",
-            name, arch, repo
+            "Getting package info: name='{}', arch={:?}, repos={:?}",
+            name, arch, repos
         );
 
         // Search for exact package name
         let filters = SearchFilters {
             name: None,
             arch: arch.clone(),
-            repo: repo.clone(),
+            repos: repos.clone(),
             not_requiring: None,
             providing: None,
         };
@@ -297,9 +305,10 @@ impl McpServer {
             // Include file list if requested
             if include_files {
                 if let Some(_pkg_id) = pkg.pkg_id {
+                    let pkg_repo = vec![pkg.repo.clone()];
                     let files =
                         self.api
-                            .list_package_files(&pkg.name, Some(&pkg.arch), Some(&pkg.repo))?;
+                            .list_package_files(&pkg.name, Some(&pkg.arch), &pkg_repo)?;
                     for (_, file_list) in &files {
                         if !file_list.is_empty() {
                             result.push_str(&format!("\nFiles ({}):\n", file_list.len()));
@@ -402,7 +411,11 @@ impl McpServer {
                 .map(String::from),
             file: args.get("file").and_then(|v| v.as_str()).map(String::from),
             arch: args.get("arch").and_then(|v| v.as_str()).map(String::from),
-            repo: args.get("repo").and_then(|v| v.as_str()).map(String::from),
+            repos: args
+                .get("repo")
+                .and_then(|v| v.as_str())
+                .map(|r| vec![r.to_string()])
+                .unwrap_or_default(),
             limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize,
         };
 

@@ -15,7 +15,7 @@ pub struct SearchQuery {
 pub struct SearchFilters {
     pub name: Option<String>,
     pub arch: Option<String>,
-    pub repo: Option<String>,
+    pub repos: Vec<String>,
     pub not_requiring: Option<String>,
     pub providing: Option<String>,
 }
@@ -83,18 +83,17 @@ impl<'a> QueryPlanner<'a> {
         // Expand search to get more candidates for merging
         let semantic_top_k = (top_k * 3).max(30);
 
-        let use_prefilter = query.filters.arch.is_some() || query.filters.repo.is_some();
+        let use_prefilter = query.filters.arch.is_some() || !query.filters.repos.is_empty();
 
         let vector_results = if use_prefilter {
-            let candidates = self.structured_search.get_filtered_candidates(
-                query.filters.arch.as_deref(),
-                query.filters.repo.as_deref(),
-            )?;
+            let candidates = self
+                .structured_search
+                .get_filtered_candidates(query.filters.arch.as_deref(), &query.filters.repos)?;
 
             debug!(
                 total_candidates = candidates.len(),
                 arch = ?query.filters.arch,
-                repo = ?query.filters.repo,
+                repos = ?query.filters.repos,
                 "Pre-filtered search space"
             );
 
@@ -162,10 +161,8 @@ impl<'a> QueryPlanner<'a> {
                         continue;
                     }
                 }
-                if let Some(ref repo) = query.filters.repo {
-                    if pkg.repo != *repo {
-                        continue;
-                    }
+                if !query.filters.repos.is_empty() && !query.filters.repos.contains(&pkg.repo) {
+                    continue;
                 }
                 if let Some(ref not_requiring) = query.filters.not_requiring {
                     if pkg.requires.iter().any(|r| r.name == *not_requiring) {

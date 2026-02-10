@@ -65,8 +65,8 @@ impl<'a> StructuredSearch<'a> {
     pub fn get_filtered_candidates(
         &self,
         arch: Option<&str>,
-        repo: Option<&str>,
+        repos: &[String],
     ) -> Result<Vec<i64>> {
-        self.store.get_filtered_pkg_ids(arch, repo)
+        self.store.get_filtered_pkg_ids(arch, repos)
     }
 }

@@ -334,31 +334,39 @@ impl PackageStore {
         Ok(count as usize)
     }
 
-    /// Get package IDs filtered by arch and/or repo (for pre-filtering vector search)
-    pub fn get_filtered_pkg_ids(&self, arch: Option<&str>, repo: Option<&str>) -> Result<Vec<i64>> {
-        let query = match (arch, repo) {
-            (Some(_), Some(_)) => "SELECT pkg_id FROM packages WHERE arch = ? AND repo = ?",
-            (Some(_), None) => "SELECT pkg_id FROM packages WHERE arch = ?",
-            (None, Some(_)) => "SELECT pkg_id FROM packages WHERE repo = ?",
-            (None, None) => "SELECT pkg_id FROM packages",
+    /// Get package IDs filtered by arch and/or repos (for pre-filtering vector search)
+    pub fn get_filtered_pkg_ids(&self, arch: Option<&str>, repos: &[String]) -> Result<Vec<i64>> {
+        let mut conditions = Vec::new();
+        let mut bind_values: Vec<String> = Vec::new();
+
+        if let Some(a) = arch {
+            conditions.push("arch = ?".to_string());
+            bind_values.push(a.to_string());
+        }
+        if !repos.is_empty() {
+            let placeholders: Vec<&str> = repos.iter().map(|_| "?").collect();
+            conditions.push(format!("repo IN ({})", placeholders.join(", ")));
+            bind_values.extend(repos.iter().cloned());
+        }
+
+        let sql = if conditions.is_empty() {
+            "SELECT pkg_id FROM packages".to_string()
+        } else {
+            format!(
+                "SELECT pkg_id FROM packages WHERE {}",
+                conditions.join(" AND ")
+            )
         };
 
-        let mut stmt = self.conn.prepare(query)?;
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = bind_values
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
 
-        let pkg_ids: Vec<i64> = match (arch, repo) {
-            (Some(a), Some(r)) => stmt
-                .query_map([a, r], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            (Some(a), None) => stmt
-                .query_map([a], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            (None, Some(r)) => stmt
-                .query_map([r], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            (None, None) => stmt
-                .query_map([], |row| row.get(0))?
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-        };
+        let pkg_ids: Vec<i64> = stmt
+            .query_map(params.as_slice(), |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(pkg_ids)
     }
@@ -776,9 +784,10 @@ impl PackageStore {
             conditions.push("p.arch = ?".to_string());
             bind_values.push(arch.clone());
         }
-        if let Some(ref repo) = filter.repo {
-            conditions.push("p.repo = ?".to_string());
-            bind_values.push(repo.clone());
+        if !filter.repos.is_empty() {
+            let placeholders: Vec<&str> = filter.repos.iter().map(|_| "?").collect();
+            conditions.push(format!("p.repo IN ({})", placeholders.join(", ")));
+            bind_values.extend(filter.repos.iter().cloned());
         }
 
         // Subquery filters
@@ -852,8 +861,8 @@ pub struct FindFilter {
     pub file: Option<String>,
     /// Exact architecture match
     pub arch: Option<String>,
-    /// Exact repository match
-    pub repo: Option<String>,
+    /// Repository filter (multiple repos ANDed as IN clause; empty = all repos)
+    pub repos: Vec<String>,
     /// Maximum results (default 50)
     pub limit: usize,
 }
@@ -868,7 +877,7 @@ impl Default for FindFilter {
             requires: None,
             file: None,
             arch: None,
-            repo: None,
+            repos: Vec::new(),
             limit: 50,
         }
     }

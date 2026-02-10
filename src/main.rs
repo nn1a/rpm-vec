@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod embedding;
 mod error;
+mod gbs;
 mod mcp;
 mod normalize;
 mod repomd;
@@ -15,7 +16,7 @@ use error::Result;
 use normalize::Package;
 use search::SearchFilters;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use storage::FindFilter;
 use tracing::info;
 
@@ -38,20 +39,44 @@ enum SyncCommands {
         /// Output file path
         #[arg(short, long, default_value = "sync-config.toml")]
         output: PathBuf,
+
+        /// Generate config from GBS configuration file instead of example
+        #[arg(long, value_name = "PATH")]
+        from_gbs: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "from_gbs")]
+        gbs_profile: Option<String>,
     },
 
     /// Perform one-time sync of all repositories
     Once {
-        /// Sync configuration file
-        #[arg(short, long, default_value = "sync-config.toml")]
-        config: PathBuf,
+        /// Sync configuration file (TOML format)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+
+        /// Use GBS configuration file instead of sync config
+        #[arg(long, value_name = "PATH", conflicts_with = "config")]
+        gbs_conf: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "gbs_conf")]
+        gbs_profile: Option<String>,
     },
 
     /// Run sync daemon (continuous background syncing)
     Daemon {
-        /// Sync configuration file
-        #[arg(short, long, default_value = "sync-config.toml")]
-        config: PathBuf,
+        /// Sync configuration file (TOML format)
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+
+        /// Use GBS configuration file instead of sync config
+        #[arg(long, value_name = "PATH", conflicts_with = "config")]
+        gbs_conf: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "gbs_conf")]
+        gbs_profile: Option<String>,
     },
 
     /// Show sync status for all repositories
@@ -146,9 +171,17 @@ enum Commands {
         #[arg(short, long)]
         arch: Option<String>,
 
-        /// Filter by repository
+        /// Filter by repository (can be specified multiple times)
         #[arg(short, long)]
-        repo: Option<String>,
+        repo: Vec<String>,
+
+        /// Use GBS configuration file to resolve repos from profile
+        #[arg(long, value_name = "PATH")]
+        gbs_conf: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "gbs_conf")]
+        gbs_profile: Option<String>,
 
         /// Exclude packages requiring this dependency
         #[arg(long)]
@@ -193,9 +226,17 @@ enum Commands {
         #[arg(short, long)]
         arch: Option<String>,
 
-        /// Filter by repository
+        /// Filter by repository (can be specified multiple times)
         #[arg(long)]
-        repo: Option<String>,
+        repo: Vec<String>,
+
+        /// Use GBS configuration file to resolve repos from profile
+        #[arg(long, value_name = "PATH")]
+        gbs_conf: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "gbs_conf")]
+        gbs_profile: Option<String>,
 
         /// Number of results to return
         #[arg(long, default_value = "50")]
@@ -222,9 +263,17 @@ enum Commands {
         #[arg(short, long)]
         arch: Option<String>,
 
-        /// Filter by repository
+        /// Filter by repository (can be specified multiple times)
         #[arg(short, long)]
-        repo: Option<String>,
+        repo: Vec<String>,
+
+        /// Use GBS configuration file to resolve repos from profile
+        #[arg(long, value_name = "PATH")]
+        gbs_conf: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "gbs_conf")]
+        gbs_profile: Option<String>,
     },
 
     // ── Repository management ────────────────────────────────────────
@@ -298,9 +347,17 @@ enum Commands {
         #[arg(short, long)]
         arch: Option<String>,
 
-        /// Filter by repository
+        /// Filter by repository (can be specified multiple times)
         #[arg(long)]
-        repo: Option<String>,
+        repo: Vec<String>,
+
+        /// Use GBS configuration file to resolve repos from profile
+        #[arg(long, value_name = "PATH")]
+        gbs_conf: Option<PathBuf>,
+
+        /// GBS profile to use (default: from gbs.conf [general] section)
+        #[arg(long, requires = "gbs_conf")]
+        gbs_profile: Option<String>,
 
         /// Show only the latest version per package name+arch
         #[arg(long)]
@@ -430,6 +487,26 @@ fn filter_latest(packages: Vec<Package>) -> Vec<Package> {
     result
 }
 
+/// Resolve repository filter from --repo flags and --gbs-conf/--gbs-profile options.
+/// If both --repo and --gbs-conf are provided, the repos are merged.
+fn resolve_repos(
+    repo: Vec<String>,
+    gbs_conf: Option<&Path>,
+    gbs_profile: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut repos = repo;
+    if let Some(gbs_path) = gbs_conf {
+        let gbs = gbs::GbsConfig::from_path(gbs_path)?;
+        let gbs_repos = gbs.get_repo_urls(gbs_profile)?;
+        for (name, _url) in gbs_repos {
+            if !repos.contains(&name) {
+                repos.push(name);
+            }
+        }
+    }
+    Ok(repos)
+}
+
 fn main() -> Result<()> {
     // Check if CUDA is available and exec CUDA version if it is
     #[cfg(not(feature = "cuda"))]
@@ -551,14 +628,18 @@ fn main() -> Result<()> {
             query,
             arch,
             repo,
+            gbs_conf,
+            gbs_profile,
             not_requiring,
             providing,
             top_k,
         } => {
+            let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
+
             let _span = tracing::info_span!("search",
                 query = %query,
                 ?arch,
-                ?repo,
+                ?repos,
                 top_k
             )
             .entered();
@@ -570,7 +651,7 @@ fn main() -> Result<()> {
             let filters = SearchFilters {
                 name: None,
                 arch,
-                repo,
+                repos,
                 not_requiring,
                 providing,
             };
@@ -653,10 +734,14 @@ fn main() -> Result<()> {
             package,
             arch,
             repo,
+            gbs_conf,
+            gbs_profile,
         } => {
+            let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
+
             let _span = tracing::info_span!("list_files", package = %package).entered();
             let api = api::RpmSearchApi::new(config)?;
-            let results = api.list_package_files(&package, arch.as_deref(), repo.as_deref())?;
+            let results = api.list_package_files(&package, arch.as_deref(), &repos)?;
 
             if results.is_empty() {
                 println!("No packages found matching '{}'", package);
@@ -696,8 +781,12 @@ fn main() -> Result<()> {
             file,
             arch,
             repo,
+            gbs_conf,
+            gbs_profile,
             limit,
         } => {
+            let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
+
             let _span = tracing::info_span!("find").entered();
             let api = api::RpmSearchApi::new(config)?;
 
@@ -709,7 +798,7 @@ fn main() -> Result<()> {
                 requires,
                 file,
                 arch,
-                repo,
+                repos,
                 limit,
             };
 
@@ -835,14 +924,24 @@ fn main() -> Result<()> {
         }
 
         Commands::Sync { command } => match command {
-            SyncCommands::Init { output } => {
+            SyncCommands::Init {
+                output,
+                from_gbs,
+                gbs_profile,
+            } => {
                 let _span = tracing::info_span!("sync_init", output = %output.display()).entered();
-                info!("Generating example sync configuration");
 
-                let example_config = sync::SyncConfig::example();
-                example_config.to_file(&output)?;
+                let sync_config = if let Some(gbs_path) = from_gbs {
+                    info!(gbs_conf = %gbs_path.display(), "Generating sync config from GBS config");
+                    gbs::GbsConfig::from_path(&gbs_path)?.to_sync_config(gbs_profile.as_deref())?
+                } else {
+                    info!("Generating example sync configuration");
+                    sync::SyncConfig::example()
+                };
 
-                println!("✓ Created example sync configuration: {}", output.display());
+                sync_config.to_file(&output)?;
+
+                println!("✓ Created sync configuration: {}", output.display());
                 println!("\nEdit this file to configure your repositories, then run:");
                 println!("  rpm_repo_search sync once --config {}", output.display());
                 println!(
@@ -853,12 +952,22 @@ fn main() -> Result<()> {
 
             SyncCommands::Once {
                 config: sync_config_path,
+                gbs_conf,
+                gbs_profile,
             } => {
-                let _span = tracing::info_span!("sync_once", config = %sync_config_path.display())
-                    .entered();
-                info!("Performing one-time sync");
-
-                let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
+                let sync_config = if let Some(gbs_path) = gbs_conf {
+                    let _span =
+                        tracing::info_span!("sync_once", gbs_conf = %gbs_path.display()).entered();
+                    info!("Performing one-time sync from GBS config");
+                    gbs::GbsConfig::from_path(&gbs_path)?.to_sync_config(gbs_profile.as_deref())?
+                } else {
+                    let config_path =
+                        sync_config_path.unwrap_or_else(|| PathBuf::from("sync-config.toml"));
+                    let _span =
+                        tracing::info_span!("sync_once", config = %config_path.display()).entered();
+                    info!("Performing one-time sync");
+                    sync::SyncConfig::from_file(&config_path)?
+                };
                 let scheduler = sync::SyncScheduler::new(sync_config, config.clone());
 
                 let runtime = tokio::runtime::Runtime::new().map_err(|e| {
@@ -899,13 +1008,22 @@ fn main() -> Result<()> {
 
             SyncCommands::Daemon {
                 config: sync_config_path,
+                gbs_conf,
+                gbs_profile,
             } => {
-                let _span =
-                    tracing::info_span!("sync_daemon", config = %sync_config_path.display())
+                let sync_config = if let Some(gbs_path) = gbs_conf {
+                    let _span = tracing::info_span!("sync_daemon", gbs_conf = %gbs_path.display())
                         .entered();
-                info!("Starting sync daemon");
-
-                let sync_config = sync::SyncConfig::from_file(&sync_config_path)?;
+                    info!("Starting sync daemon from GBS config");
+                    gbs::GbsConfig::from_path(&gbs_path)?.to_sync_config(gbs_profile.as_deref())?
+                } else {
+                    let config_path =
+                        sync_config_path.unwrap_or_else(|| PathBuf::from("sync-config.toml"));
+                    let _span = tracing::info_span!("sync_daemon", config = %config_path.display())
+                        .entered();
+                    info!("Starting sync daemon");
+                    sync::SyncConfig::from_file(&config_path)?
+                };
                 let scheduler = sync::SyncScheduler::new(sync_config, config);
 
                 println!("Starting sync daemon...");
@@ -981,9 +1099,13 @@ fn main() -> Result<()> {
             queryformat,
             arch,
             repo,
+            gbs_conf,
+            gbs_profile,
             latest,
             limit,
         } => {
+            let repos = resolve_repos(repo, gbs_conf.as_deref(), gbs_profile.as_deref())?;
+
             let _span = tracing::info_span!("repoquery").entered();
             let api = api::RpmSearchApi::new(config)?;
 
@@ -995,7 +1117,7 @@ fn main() -> Result<()> {
                     .into_iter()
                     .map(|(pkg, _, _)| pkg)
                     .filter(|pkg| arch.as_ref().is_none_or(|a| pkg.arch == *a))
-                    .filter(|pkg| repo.as_ref().is_none_or(|r| pkg.repo == *r))
+                    .filter(|pkg| repos.is_empty() || repos.contains(&pkg.repo))
                     .collect::<Vec<_>>()
             } else {
                 // Build FindFilter for name / whatprovides / whatrequires queries
@@ -1004,7 +1126,7 @@ fn main() -> Result<()> {
                     provides: whatprovides.clone(),
                     requires: whatrequires.clone(),
                     arch: arch.clone(),
-                    repo: repo.clone(),
+                    repos: repos.clone(),
                     limit,
                     ..Default::default()
                 };
@@ -1014,13 +1136,13 @@ fn main() -> Result<()> {
                     && filter.provides.is_none()
                     && filter.requires.is_none()
                     && filter.arch.is_none()
-                    && filter.repo.is_none()
+                    && filter.repos.is_empty()
                 {
                     // general_search returns empty when no conditions, so use name wildcard
                     let all_filter = FindFilter {
                         name: Some("*".to_string()),
                         arch: arch.clone(),
-                        repo: repo.clone(),
+                        repos: repos.clone(),
                         limit,
                         ..Default::default()
                     };
@@ -1112,8 +1234,9 @@ fn main() -> Result<()> {
                         println!("# {}-{}.{}", pkg.name, pkg.full_version(), pkg.arch);
                     }
                     if pkg.pkg_id.is_some() {
+                        let pkg_repo = vec![pkg.repo.clone()];
                         let files =
-                            api.list_package_files(&pkg.name, Some(&pkg.arch), Some(&pkg.repo))?;
+                            api.list_package_files(&pkg.name, Some(&pkg.arch), &pkg_repo)?;
                         let mut found = false;
                         for (_, file_list) in &files {
                             for (path, _) in file_list {
