@@ -11,6 +11,7 @@ pub struct RepoSyncer {
     api: RpmSearchApi,
     state_store: SyncStateStore,
     work_dir: PathBuf,
+    http: ureq::Agent,
 }
 
 impl RepoSyncer {
@@ -18,10 +19,14 @@ impl RepoSyncer {
         // Create work directory if it doesn't exist
         fs::create_dir_all(&work_dir).map_err(RpmSearchError::Io)?;
 
+        // Agent reads proxy from HTTP_PROXY / HTTPS_PROXY / ALL_PROXY env vars
+        let http = ureq::Agent::new_with_defaults();
+
         Ok(Self {
             api,
             state_store,
             work_dir,
+            http,
         })
     }
 
@@ -174,7 +179,9 @@ impl RepoSyncer {
     }
 
     fn download_file(&self, url: &str) -> Result<String> {
-        let body = ureq::get(url)
+        let body = self
+            .http
+            .get(url)
             .call()
             .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?
             .into_body()
@@ -192,7 +199,9 @@ impl RepoSyncer {
 
         let dest_path = self.work_dir.join(format!("{}_{}", repo_name, filename));
 
-        let response = ureq::get(url)
+        let response = self
+            .http
+            .get(url)
             .call()
             .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?;
 

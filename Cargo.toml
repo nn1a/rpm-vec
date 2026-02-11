@@ -45,7 +45,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.49", features = ["full"], optional = true }
 
 # Sync
-ureq = "3"
+ureq = { version = "3", features = ["platform-verifier"] }
 toml = { version = "0.9" }
 chrono = { version = "0.4", features = ["serde"] }
 
