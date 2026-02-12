@@ -63,18 +63,21 @@ impl VectorStore {
             Err(e) => debug!("Could not drop embeddings table: {}", e),
         }
 
-        // Recreate the virtual table
+        // Recreate the virtual table with cosine distance metric
         self.conn.execute(
             &format!(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
                         pkg_id INTEGER PRIMARY KEY,
-                        embedding FLOAT[{}]
+                        embedding FLOAT[{}] distance_metric=cosine
                     )",
                 dimension
             ),
             [],
         )?;
-        info!(dimension, "Created fresh embeddings table");
+        info!(
+            dimension,
+            "Created fresh embeddings table with cosine metric"
+        );
 
         Ok(())
     }
@@ -85,7 +88,7 @@ impl VectorStore {
             &format!(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
                         pkg_id INTEGER PRIMARY KEY,
-                        embedding FLOAT[{}]
+                        embedding FLOAT[{}] distance_metric=cosine
                     )",
                 dimension
             ),
@@ -175,13 +178,13 @@ impl VectorStore {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        // Convert L2 distance to cosine similarity for normalized vectors:
-        // L2_dist = sqrt(2 * (1 - cos_sim))
-        // cos_sim = 1 - L2_dist^2 / 2
+        // Convert cosine distance to cosine similarity
+        // cosine_distance = 1 - cosine_similarity
+        // Therefore: cosine_similarity = 1 - cosine_distance
         let similarities: Vec<(i64, f32)> = results
             .into_iter()
             .map(|(id, dist)| {
-                let cos_sim = (1.0 - dist * dist / 2.0).clamp(0.0, 1.0);
+                let cos_sim = (1.0 - dist).clamp(0.0, 1.0);
                 (id, cos_sim)
             })
             .collect();
@@ -229,7 +232,8 @@ impl VectorStore {
             .filter_map(|result| result.ok())
             .filter(|(pkg_id, _)| candidate_set.contains(pkg_id))
             .map(|(id, dist)| {
-                let cos_sim = (1.0 - dist * dist / 2.0).clamp(0.0, 1.0);
+                // Convert cosine distance to cosine similarity
+                let cos_sim = (1.0 - dist).clamp(0.0, 1.0);
                 (id, cos_sim)
             })
             .collect();
