@@ -114,10 +114,9 @@ enum RepoCommands {
 }
 
 #[derive(Subcommand)]
-enum Commands {
-    // ── Indexing ─────────────────────────────────────────────────────
+enum IndexCommands {
     /// Index a repository from primary.xml file
-    Index {
+    Repo {
         /// Path to primary.xml, primary.xml.gz, or primary.xml.zst
         #[arg(short, long)]
         file: PathBuf,
@@ -139,20 +138,20 @@ enum Commands {
         base_url: Option<String>,
     },
 
-    /// Index filelists from filelists.xml file (run after 'index')
-    IndexFilelists {
+    /// Index filelists from filelists.xml file (run after 'index repo')
+    Filelists {
         /// Path to filelists.xml, filelists.xml.gz, or filelists.xml.zst
         #[arg(short, long)]
         file: PathBuf,
 
-        /// Repository name (must match the repo used in 'index')
+        /// Repository name (must match the repo used in 'index repo')
         #[arg(short, long)]
         repo: String,
     },
 
     /// Build embeddings for indexed packages
     #[cfg(feature = "embedding")]
-    BuildEmbeddings {
+    Embeddings {
         /// Embedding model type (minilm = English, e5-multilingual = 100 languages)
         #[arg(long, value_enum, default_value = "minilm")]
         model_type: ModelType,
@@ -172,6 +171,24 @@ enum Commands {
         /// Force full rebuild (drop all embeddings and regenerate)
         #[arg(long)]
         rebuild: bool,
+    },
+
+    /// Download embedding model from HuggingFace Hub
+    #[cfg(feature = "embedding")]
+    DownloadModel {
+        /// Model type to download
+        #[arg(long, value_enum, default_value = "minilm")]
+        model_type: ModelType,
+    },
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    // ── Indexing ─────────────────────────────────────────────────────
+    /// Indexing and model preparation commands
+    Index {
+        #[command(subcommand)]
+        command: IndexCommands,
     },
 
     // ── Search ───────────────────────────────────────────────────────
@@ -225,15 +242,6 @@ enum Commands {
     Sync {
         #[command(subcommand)]
         command: SyncCommands,
-    },
-
-    // ── Model management ────────────────────────────────────────────
-    /// Download embedding model from HuggingFace Hub
-    #[cfg(feature = "embedding")]
-    DownloadModel {
-        /// Model type to download
-        #[arg(long, value_enum, default_value = "minilm")]
-        model_type: ModelType,
     },
 
     // ── Repoquery ─────────────────────────────────────────────────────
@@ -527,85 +535,119 @@ fn main() -> Result<()> {
     let config = Config::new(cli.db);
 
     match cli.command {
-        Commands::Index {
-            file,
-            repo,
-            update,
-            filelists,
-            base_url,
-        } => {
-            let _span = tracing::info_span!("index", repo = %repo, file = %file.display(), update)
-                .entered();
-            if update {
-                info!("Updating repository (incremental)");
-            } else {
-                info!("Indexing repository");
-            }
-            let db_path = config.db_path.clone();
-            let mut api = api::RpmSearchApi::new(config)?;
-            let count = api.index_repository(&file, &repo, update)?;
-            if update {
-                info!(count, "Successfully updated packages");
-            } else {
-                info!(count, "Successfully indexed packages");
+        Commands::Index { command } => match command {
+            IndexCommands::Repo {
+                file,
+                repo,
+                update,
+                filelists,
+                base_url,
+            } => {
+                let _span =
+                    tracing::info_span!("index", repo = %repo, file = %file.display(), update)
+                        .entered();
+                if update {
+                    info!("Updating repository (incremental)");
+                } else {
+                    info!("Indexing repository");
+                }
+                let db_path = config.db_path.clone();
+                let mut api = api::RpmSearchApi::new(config)?;
+                let count = api.index_repository(&file, &repo, update)?;
+                if update {
+                    info!(count, "Successfully updated packages");
+                } else {
+                    info!(count, "Successfully indexed packages");
+                }
+
+                if let Some(filelists_path) = filelists {
+                    info!("Indexing filelists");
+                    let fl_count = api.index_filelists(&filelists_path, &repo)?;
+                    info!(fl_count, "Successfully indexed file entries");
+                }
+
+                if let Some(ref url) = base_url {
+                    let conn = rusqlite::Connection::open(&db_path)?;
+                    let state_store = sync::SyncStateStore::new(conn)?;
+                    state_store.set_base_url(&repo, url)?;
+                    info!(base_url = %url, "Saved repository base URL");
+                }
             }
 
-            // If filelists provided, index them too
-            if let Some(filelists_path) = filelists {
+            IndexCommands::Filelists { file, repo } => {
+                let _span =
+                    tracing::info_span!("index_filelists", repo = %repo, file = %file.display())
+                        .entered();
                 info!("Indexing filelists");
-                let fl_count = api.index_filelists(&filelists_path, &repo)?;
-                info!(fl_count, "Successfully indexed file entries");
+                let mut api = api::RpmSearchApi::new(config)?;
+                let count = api.index_filelists(&file, &repo)?;
+                info!(count, "Successfully indexed file entries");
             }
 
-            // Save base_url for download URL generation
-            if let Some(ref url) = base_url {
-                let conn = rusqlite::Connection::open(&db_path)?;
-                let state_store = sync::SyncStateStore::new(conn)?;
-                state_store.set_base_url(&repo, url)?;
-                info!(base_url = %url, "Saved repository base URL");
-            }
-        }
-
-        #[cfg(feature = "embedding")]
-        Commands::BuildEmbeddings {
-            model_type,
-            model,
-            tokenizer,
-            verbose,
-            rebuild,
-        } => {
-            // Resolve model files: custom paths > local dir > hf-hub download
-            let model_files = embedding::hub::resolve_model_files(
-                &model_type,
-                model.as_deref(),
-                tokenizer.as_deref(),
-            )?;
-
-            let _span = tracing::info_span!("build_embeddings",
-                model_type = %model_type,
-                config = %model_files.config.display(),
-                weights = %model_files.weights.display(),
-                tokenizer = %model_files.tokenizer.display(),
+            #[cfg(feature = "embedding")]
+            IndexCommands::Embeddings {
+                model_type,
+                model,
+                tokenizer,
                 verbose,
-                rebuild
-            )
-            .entered();
-            info!("Building embeddings");
-            let mut config = config;
-            config.model_type = model_type;
-            config.model_path = model_files
-                .weights
-                .parent()
-                .unwrap_or(std::path::Path::new("."))
-                .to_path_buf();
-            config.tokenizer_path = model_files.tokenizer.clone();
+                rebuild,
+            } => {
+                let model_files = embedding::hub::resolve_model_files(
+                    &model_type,
+                    model.as_deref(),
+                    tokenizer.as_deref(),
+                )?;
 
-            let api = api::RpmSearchApi::new(config.clone())?;
-            let embedder =
-                embedding::Embedder::from_model_files(&model_files, config.model_type.clone())?;
-            let count = api.build_embeddings(&embedder, verbose, rebuild)?;
-            info!(count, "Successfully built embeddings");
-        }
+                let _span = tracing::info_span!("build_embeddings",
+                    model_type = %model_type,
+                    config = %model_files.config.display(),
+                    weights = %model_files.weights.display(),
+                    tokenizer = %model_files.tokenizer.display(),
+                    verbose,
+                    rebuild
+                )
+                .entered();
+                info!("Building embeddings");
+                let mut config = config;
+                config.model_type = model_type;
+                config.model_path = model_files
+                    .weights
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf();
+                config.tokenizer_path = model_files.tokenizer.clone();
+
+                let api = api::RpmSearchApi::new(config.clone())?;
+                let embedder = embedding::Embedder::from_model_files(
+                    &model_files,
+                    config.model_type.clone(),
+                )?;
+                let count = api.build_embeddings(&embedder, verbose, rebuild)?;
+                info!(count, "Successfully built embeddings");
+            }
+
+            #[cfg(feature = "embedding")]
+            IndexCommands::DownloadModel { model_type } => {
+                let _span = tracing::info_span!("download_model", model_type = %model_type)
+                    .entered();
+                info!("Downloading model");
+
+                println!(
+                    "Downloading {} model from HuggingFace Hub...",
+                    model_type.display_name()
+                );
+                println!("Repository: {}", model_type.huggingface_url());
+                println!();
+
+                let hub = embedding::ModelHub::new()?;
+                let files = hub.get_model_files(&model_type)?;
+
+                println!("Model files downloaded successfully:");
+                println!("  Config:    {}", files.config.display());
+                println!("  Weights:   {}", files.weights.display());
+                println!("  Tokenizer: {}", files.tokenizer.display());
+            }
+        },
 
         #[cfg(feature = "embedding")]
         Commands::Search {
@@ -686,16 +728,6 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::IndexFilelists { file, repo } => {
-            let _span =
-                tracing::info_span!("index_filelists", repo = %repo, file = %file.display())
-                    .entered();
-            info!("Indexing filelists");
-            let mut api = api::RpmSearchApi::new(config)?;
-            let count = api.index_filelists(&file, &repo)?;
-            info!(count, "Successfully indexed file entries");
-        }
-
         Commands::Stats => {
             let _span = tracing::info_span!("stats").entered();
             let api = api::RpmSearchApi::new(config)?;
@@ -767,27 +799,6 @@ fn main() -> Result<()> {
                 }
             }
         },
-
-        #[cfg(feature = "embedding")]
-        Commands::DownloadModel { model_type } => {
-            let _span = tracing::info_span!("download_model", model_type = %model_type).entered();
-            info!("Downloading model");
-
-            println!(
-                "Downloading {} model from HuggingFace Hub...",
-                model_type.display_name()
-            );
-            println!("Repository: {}", model_type.huggingface_url());
-            println!();
-
-            let hub = embedding::ModelHub::new()?;
-            let files = hub.get_model_files(&model_type)?;
-
-            println!("Model files downloaded successfully:");
-            println!("  Config:    {}", files.config.display());
-            println!("  Weights:   {}", files.weights.display());
-            println!("  Tokenizer: {}", files.tokenizer.display());
-        }
 
         #[cfg(feature = "embedding")]
         Commands::McpServer => {
@@ -1141,7 +1152,7 @@ fn main() -> Result<()> {
                             }
                         }
                         if !found {
-                            println!("  (no filelists indexed — run 'index-filelists' first)");
+                            println!("  (no filelists indexed — run 'index filelists' first)");
                         }
                     }
                 }

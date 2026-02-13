@@ -74,7 +74,7 @@ First, download the `primary.xml.gz` (or `primary.xml.zst`) file from an RPM rep
 wget https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/repos/standard/packages/repodata/primary.xml.gz
 
 # Index it (supports .gz and .zst compression)
-./rpm_repo_search index --file primary.xml.gz --repo tizen-unified
+./rpm_repo_search index repo --file primary.xml.gz --repo tizen-unified
 ```
 
 ### 2. Build Embeddings
@@ -106,13 +106,13 @@ cd ../..
 
 ```bash
 # Incremental (default) - only builds for new packages
-./rpm_repo_search build-embeddings
+./rpm_repo_search index embeddings
 
 # Full rebuild - drop all embeddings and regenerate
-./rpm_repo_search build-embeddings --rebuild
+./rpm_repo_search index embeddings --rebuild
 
 # With detailed batch information
-./rpm_repo_search build-embeddings --verbose
+./rpm_repo_search index embeddings --verbose
 ```
 
 ### 3. Performance Tips
@@ -163,7 +163,7 @@ cargo build --release --features cuda
 
 ## Commands
 
-### `index`
+### `index repo`
 Index RPM repository metadata from primary.xml file.
 
 **Options:**
@@ -174,13 +174,46 @@ Index RPM repository metadata from primary.xml file.
 **Examples:**
 ```bash
 # Initial indexing
-./rpm_repo_search index -f primary.xml.gz -r tizen-unified
+./rpm_repo_search index repo -f primary.xml.gz -r tizen-unified
 
 # Incremental update (add new, update changed, remove deleted packages)
-./rpm_repo_search index -f primary-updated.xml.gz -r tizen-unified --update
+./rpm_repo_search index repo -f primary-updated.xml.gz -r tizen-unified --update
 ```
 
-### `build-embeddings`
+### `index filelists`
+Index filelists metadata from filelists.xml.
+
+Run this after `index repo` when you need file-level queries.
+
+**Options:**
+- `-f, --file <PATH>`: Path to filelists.xml, filelists.xml.gz, or filelists.xml.zst
+- `-r, --repo <NAME>`: Repository name (must match the repo used in `index repo`)
+
+**Examples:**
+```bash
+# Index package metadata first
+./rpm_repo_search index repo -f primary.xml.gz -r tizen-unified
+
+# Then index filelists metadata
+./rpm_repo_search index filelists -f filelists.xml.gz -r tizen-unified
+```
+
+### `index download-model`
+Download embedding model files from HuggingFace Hub.
+
+**Options:**
+- `--model-type <MODEL_TYPE>`: Model type (`minilm`, `e5-multilingual`)
+
+**Examples:**
+```bash
+# Download default model (minilm)
+./rpm_repo_search index download-model
+
+# Download multilingual model
+./rpm_repo_search index download-model --model-type e5-multilingual
+```
+
+### `index embeddings`
 Generate vector embeddings for indexed packages.
 
 By default, runs incrementally — only generates embeddings for packages that don't have one yet. Use `--rebuild` to force a full rebuild.
@@ -195,13 +228,13 @@ By default, runs incrementally — only generates embeddings for packages that d
 
 ```bash
 # Incremental (default) - fast, only processes new packages
-./rpm_repo_search build-embeddings
+./rpm_repo_search index embeddings
 
 # Full rebuild - useful after model changes
-./rpm_repo_search build-embeddings --rebuild
+./rpm_repo_search index embeddings --rebuild
 
 # With logging to see which device is being used
-RUST_LOG=info ./rpm_repo_search build-embeddings
+RUST_LOG=info ./rpm_repo_search index embeddings
 ```
 
 **Device selection (logged at INFO level):**
@@ -249,9 +282,9 @@ You can index and manage multiple repositories simultaneously:
 
 ```bash
 # Index multiple repositories
-./rpm_repo_search index -f tizen-unified.xml.gz -r tizen-unified
-./rpm_repo_search index -f tizen-ivi.xml.gz -r tizen-ivi
-./rpm_repo_search index -f fedora-39.xml.zst -r fedora-39
+./rpm_repo_search index repo -f tizen-unified.xml.gz -r tizen-unified
+./rpm_repo_search index repo -f tizen-ivi.xml.gz -r tizen-ivi
+./rpm_repo_search index repo -f fedora-39.xml.zst -r fedora-39
 
 # List all repositories
 ./rpm_repo_search list-repos
@@ -272,10 +305,10 @@ Instead of re-indexing an entire repository, you can perform incremental updates
 
 ```bash
 # Initial indexing
-./rpm_repo_search index -f tizen-unified.xml.gz -r tizen-unified
+./rpm_repo_search index repo -f tizen-unified.xml.gz -r tizen-unified
 
 # Later, when the repository is updated
-./rpm_repo_search index -f tizen-unified-updated.xml.gz -r tizen-unified --update
+./rpm_repo_search index repo -f tizen-unified-updated.xml.gz -r tizen-unified --update
 
 # The update will:
 # - Add new packages that didn't exist before
@@ -492,10 +525,10 @@ This project uses structured logging with the `tracing` framework. Control log v
 RUST_LOG=debug ./rpm_repo_search search "kernel"
 
 # Trace level - all logs including dependencies
-RUST_LOG=trace ./rpm_repo_search build-embeddings
+RUST_LOG=trace ./rpm_repo_search index embeddings
 
 # Module-specific logging
-RUST_LOG=rpm_repo_search::api=debug ./rpm_repo_search index -f primary.xml.gz -r tizen-unified
+RUST_LOG=rpm_repo_search::api=debug ./rpm_repo_search index repo -f primary.xml.gz -r tizen-unified
 ```
 
 **Available log levels**: `error`, `warn`, `info` (default), `debug`, `trace`
@@ -516,7 +549,6 @@ For more detailed information:
 - **Usage Guide**: [USAGE.md](docs/USAGE.md) - Complete usage instructions
 - **MCP Server Guide**: [MCP_GUIDE.md](docs/MCP_GUIDE.md) - Model Context Protocol integration
 - **Development**: [DEVELOPMENT.md](docs/DEVELOPMENT.md) - Development notes and architecture
-- **SQLite-vec Bundling**: [SQLITE_VEC_BUNDLING.md](docs/SQLITE_VEC_BUNDLING.md) - Extension bundling strategies
 - **Compression**: [COMPRESSION.md](docs/COMPRESSION.md) - Supported compression formats
 - **Changelog**: [CHANGELOG.md](docs/CHANGELOG.md) - Version history and updates
 - **Design Documents**: 

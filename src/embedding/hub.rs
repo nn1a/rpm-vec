@@ -1,6 +1,6 @@
 use crate::config::ModelType;
 use crate::error::{Result, RpmSearchError};
-use hf_hub::api::sync::{Api, ApiBuilder, ApiRepo};
+use hf_hub::api::tokio::{Api, ApiBuilder, ApiRepo};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -99,7 +99,19 @@ impl ModelHub {
 
     fn get_file(&self, repo: &ApiRepo, filename: &str, model_type: &ModelType) -> Result<PathBuf> {
         debug!(file = %filename, "Fetching model file");
-        repo.get(filename).map_err(|e| {
+        let fetch_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(repo.get(filename)))
+        } else {
+            let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+                RpmSearchError::ModelDownload(format!(
+                    "Failed to create Tokio runtime for model download: {}",
+                    e
+                ))
+            })?;
+            runtime.block_on(repo.get(filename))
+        };
+
+        fetch_result.map_err(|e| {
             RpmSearchError::ModelDownload(format!(
                 "Failed to download '{}' for {}: {}\n\
                  Model: {}\n\

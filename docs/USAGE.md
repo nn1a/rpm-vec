@@ -30,6 +30,7 @@ wget https://download.tizen.org/snapshots/TIZEN/Tizen/Tizen-Unified/reference/re
 
 # 인덱싱 (gz, zst 압축 자동 감지)
 ./target/release/rpm_repo_search index \
+  repo \
   --file primary.xml.gz \
   --repo tizen-unified
 ```
@@ -84,13 +85,13 @@ cd ../..
 
 ```bash
 # 인크리멘털 (기본) - 새 패키지만 처리하여 빠름
-./target/release/rpm_repo_search build-embeddings
+./target/release/rpm_repo_search index embeddings
 
 # 전체 재빌드 - 모든 임베딩을 삭제하고 다시 생성
-./target/release/rpm_repo_search build-embeddings --rebuild
+./target/release/rpm_repo_search index embeddings --rebuild
 
 # 상세 배치 정보 표시
-./target/release/rpm_repo_search build-embeddings --verbose
+./target/release/rpm_repo_search index embeddings --verbose
 ```
 
 **기본 출력 (진행률 표시):**
@@ -132,25 +133,64 @@ Batch 300/300: Processed 20 packages → Total: 9588/9588 (100.0%)
 
 ## 명령어 상세
 
-### index
+### index repo
 저장소 메타데이터 인덱싱
 
 ```bash
-rpm_repo_search index --file <PATH> --repo <NAME>
+rpm_repo_search index repo --file <PATH> --repo <NAME>
 ```
 
 **옵션:**
 - `-f, --file <PATH>`: primary.xml, primary.xml.gz, 또는 primary.xml.zst 파일 경로
 - `-r, --repo <NAME>`: 저장소 이름
 
-### build-embeddings
+### index filelists
+패키지 파일 목록(filelists.xml) 인덱싱
+
+`index repo`로 패키지 메타데이터를 먼저 인덱싱한 뒤 실행해야 합니다.
+
+```bash
+rpm_repo_search index filelists --file <PATH> --repo <NAME>
+```
+
+**옵션:**
+- `-f, --file <PATH>`: filelists.xml, filelists.xml.gz, 또는 filelists.xml.zst 파일 경로
+- `-r, --repo <NAME>`: 저장소 이름 (`index repo`에 사용한 이름과 동일)
+
+**예제:**
+```bash
+# primary 인덱싱 후 filelists 인덱싱
+rpm_repo_search index repo -f primary.xml.gz -r myrepo
+rpm_repo_search index filelists -f filelists.xml.gz -r myrepo
+```
+
+### index download-model
+HuggingFace Hub에서 임베딩 모델 다운로드
+
+```bash
+rpm_repo_search index download-model [OPTIONS]
+```
+
+**옵션:**
+- `--model-type <MODEL_TYPE>`: 다운로드할 모델 타입 (`minilm`, `e5-multilingual`)
+
+**예제:**
+```bash
+# 기본 모델(minilm) 다운로드
+rpm_repo_search index download-model
+
+# 다국어 모델 다운로드
+rpm_repo_search index download-model --model-type e5-multilingual
+```
+
+### index embeddings
 패키지에 대한 벡터 임베딩 생성
 
 기본적으로 인크리멘털 모드로 동작하여 임베딩이 없는 패키지만 처리합니다.
 `--rebuild` 옵션을 사용하면 전체 재빌드합니다.
 
 ```bash
-rpm_repo_search build-embeddings [OPTIONS]
+rpm_repo_search index embeddings [OPTIONS]
 ```
 
 **옵션:**
@@ -162,13 +202,13 @@ rpm_repo_search build-embeddings [OPTIONS]
 **예제:**
 ```bash
 # 인크리멘털 (기본) - 새 패키지만 처리
-rpm_repo_search build-embeddings
+rpm_repo_search index embeddings
 
 # 전체 재빌드 - 모델 변경 후 등
-rpm_repo_search build-embeddings --rebuild
+rpm_repo_search index embeddings --rebuild
 
 # 상세 정보 표시
-rpm_repo_search build-embeddings --verbose
+rpm_repo_search index embeddings --verbose
 ```
 
 ### search
@@ -204,7 +244,7 @@ rpm_repo_search stats
 cargo build --release
 
 # 2. 저장소 인덱싱
-./target/release/rpm_repo_search index -f primary.xml.gz -r myrepo
+./target/release/rpm_repo_search index repo -f primary.xml.gz -r myrepo
 
 # 3. 통계 확인
 ./target/release/rpm_repo_search stats
@@ -220,13 +260,13 @@ cargo build --release
 cargo build --release
 
 # 2. 모델 다운로드 (one-time)
-# (모델 파일을 models/all-MiniLM-L6-v2/에 배치)
+./target/release/rpm_repo_search index download-model
 
 # 3. 저장소 인덱싱
-./target/release/rpm_repo_search index -f primary.xml.gz -r myrepo
+./target/release/rpm_repo_search index repo -f primary.xml.gz -r myrepo
 
 # 4. Embedding 생성 (기본적으로 진행률 표시됨)
-./target/release/rpm_repo_search build-embeddings
+./target/release/rpm_repo_search index embeddings
 
 # 5. 의미 기반 검색
 ./target/release/rpm_repo_search search "SSL cryptography library"
@@ -245,7 +285,7 @@ cargo build --release
 다른 위치를 사용하려면 `--db` 옵션을 사용하세요:
 
 ```bash
-./target/release/rpm_repo_search --db /path/to/my.db index -f primary.xml.gz -r myrepo
+./target/release/rpm_repo_search --db /path/to/my.db index repo -f primary.xml.gz -r myrepo
 ```
 
 ## 문제 해결

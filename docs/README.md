@@ -25,7 +25,7 @@ docs/
 - **대상**: 최종 사용자, CLI 사용자
 - **내용**: 
   - 설치 및 빌드 방법
-  - 명령어 사용법 (index, search, build-embeddings, stats)
+   - 명령어 사용법 (index repo/filelists/embeddings/download-model, search, stats)
   - 실전 예제 및 워크플로우
   - 문제 해결 가이드
 

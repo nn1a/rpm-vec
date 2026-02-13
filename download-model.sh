@@ -68,18 +68,18 @@ MODEL_TYPE="${1:-minilm}"
 case "$MODEL_TYPE" in
     minilm)
         download_minilm
-        echo "Usage: rpm_repo_search build-embeddings"
+        echo "Usage: rpm_repo_search index embeddings"
         ;;
     e5)
         download_e5
-        echo "Usage: rpm_repo_search build-embeddings --model-type e5-multilingual"
+        echo "Usage: rpm_repo_search index embeddings --model-type e5-multilingual"
         ;;
     all)
         download_minilm
         download_e5
         echo "Usage:"
-        echo "  rpm_repo_search build-embeddings                          # English (MiniLM)"
-        echo "  rpm_repo_search build-embeddings --model-type e5-multilingual  # Multilingual (E5)"
+        echo "  rpm_repo_search index embeddings                          # English (MiniLM)"
+        echo "  rpm_repo_search index embeddings --model-type e5-multilingual  # Multilingual (E5)"
         ;;
     *)
         echo "Unknown model type: $MODEL_TYPE"

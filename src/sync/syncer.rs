@@ -11,16 +11,16 @@ pub struct RepoSyncer {
     api: RpmSearchApi,
     state_store: SyncStateStore,
     work_dir: PathBuf,
-    http: ureq::Agent,
+    http: reqwest::blocking::Client,
 }
 
 impl RepoSyncer {
     pub fn new(api: RpmSearchApi, state_store: SyncStateStore, work_dir: PathBuf) -> Result<Self> {
-        // Create work directory if it doesn't exist
         fs::create_dir_all(&work_dir).map_err(RpmSearchError::Io)?;
 
-        // Agent reads proxy from HTTP_PROXY / HTTPS_PROXY / ALL_PROXY env vars
-        let http = ureq::Agent::new_with_defaults();
+        let http = reqwest::blocking::Client::builder()
+            .build()
+            .map_err(|e| RpmSearchError::Fetch(format!("Failed to build HTTP client: {}", e)))?;
 
         Ok(Self {
             api,
@@ -34,7 +34,6 @@ impl RepoSyncer {
     pub fn sync_repository(&mut self, config: &RepoSyncConfig) -> Result<SyncResult> {
         info!(repo = %config.name, url = %config.base_url, "Starting repository sync");
 
-        // Mark as in progress
         let mut state = self
             .state_store
             .get_state(&config.name)?
@@ -47,16 +46,12 @@ impl RepoSyncer {
                 base_url: None,
             });
 
-        // Always update base_url from config
         state.base_url = Some(config.base_url.clone());
-
         state.last_status = SyncStatus::InProgress;
         self.state_store.update_state(&state)?;
 
-        // Perform sync
         let result = self.do_sync(config, &state);
 
-        // Update state based on result
         match &result {
             Ok(sync_result) => {
                 state.last_sync = Some(Utc::now());
@@ -87,12 +82,7 @@ impl RepoSyncer {
         result
     }
 
-    fn do_sync(
-        &mut self,
-        config: &RepoSyncConfig,
-        current_state: &RepoSyncState,
-    ) -> Result<SyncResult> {
-        // Download repomd.xml
+    fn do_sync(&mut self, config: &RepoSyncConfig, current_state: &RepoSyncState) -> Result<SyncResult> {
         let repomd_url = format!(
             "{}/repodata/repomd.xml",
             config.base_url.trim_end_matches('/')
@@ -100,11 +90,8 @@ impl RepoSyncer {
         debug!(url = %repomd_url, "Downloading repomd.xml");
 
         let repomd_content = self.download_file(&repomd_url)?;
-
-        // Parse repomd.xml to find primary.xml and filelists.xml locations
         let repodata_info = self.parse_repomd(&repomd_content)?;
 
-        // Check if changed (compare checksum)
         let changed = match &current_state.last_checksum {
             Some(last) => last != &repodata_info.primary_checksum,
             None => true,
@@ -119,7 +106,6 @@ impl RepoSyncer {
             });
         }
 
-        // Download primary.xml
         let primary_url = format!(
             "{}/{}",
             config.base_url.trim_end_matches('/'),
@@ -129,18 +115,15 @@ impl RepoSyncer {
 
         let primary_file = self.download_to_file(&primary_url, &config.name)?;
 
-        // Perform incremental update
         info!(repo = %config.name, file = %primary_file.display(), "Performing incremental update");
         let packages_synced = self
             .api
             .index_repository(&primary_file, &config.name, true)?;
 
-        // Clean up downloaded file
         if let Err(e) = fs::remove_file(&primary_file) {
             warn!(file = %primary_file.display(), error = %e, "Failed to clean up downloaded file");
         }
 
-        // Download and index filelists.xml (if enabled and available)
         if config.sync_filelists {
             if let Some(ref fl_location) = repodata_info.filelists_location {
                 let fl_url = format!(
@@ -182,10 +165,11 @@ impl RepoSyncer {
         let body = self
             .http
             .get(url)
-            .call()
+            .send()
             .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?
-            .into_body()
-            .read_to_string()
+            .error_for_status()
+            .map_err(|e| RpmSearchError::Fetch(format!("HTTP status error: {}", e)))?
+            .text()
             .map_err(|e| RpmSearchError::Fetch(format!("Failed to read response: {}", e)))?;
 
         Ok(body)
@@ -199,16 +183,17 @@ impl RepoSyncer {
 
         let dest_path = self.work_dir.join(format!("{}_{}", repo_name, filename));
 
-        let response = self
+        let mut response = self
             .http
             .get(url)
-            .call()
-            .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?;
+            .send()
+            .map_err(|e| RpmSearchError::Fetch(format!("HTTP request failed: {}", e)))?
+            .error_for_status()
+            .map_err(|e| RpmSearchError::Fetch(format!("HTTP status error: {}", e)))?;
 
-        let mut reader = response.into_body().into_reader();
         let mut file = fs::File::create(&dest_path).map_err(RpmSearchError::Io)?;
-
-        std::io::copy(&mut reader, &mut file).map_err(RpmSearchError::Io)?;
+        std::io::copy(&mut response, &mut file)
+            .map_err(|e| RpmSearchError::Fetch(format!("Failed to write downloaded file: {}", e)))?;
 
         Ok(dest_path)
     }
